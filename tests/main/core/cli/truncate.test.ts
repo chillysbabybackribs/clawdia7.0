@@ -48,7 +48,7 @@ describe('truncateBrowserResult', () => {
 
 describe('executeShellTool truncation', () => {
   it('truncates stdout over SHELL_MAX', async () => {
-    const result = await executeShellTool('shell_exec', { command: `python3 -c "print('x' * 5000)"` });
+    const result = await executeShellTool('shell_exec', { command: `node -e "process.stdout.write('x'.repeat(5000))"` });
     expect(result.length).toBeLessThanOrEqual(SHELL_MAX);
     expect(result).toContain('[truncated');
   });
