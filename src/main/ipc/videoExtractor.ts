@@ -3,8 +3,9 @@ import { ipcMain, dialog, BrowserWindow } from 'electron';
 import { spawn, exec } from 'child_process';
 import * as os from 'os';
 import * as path from 'path';
+import type { BrowserService } from '../core/browser/BrowserService';
 
-export function registerVideoExtractorIpc(win: BrowserWindow): void {
+export function registerVideoExtractorIpc(win: BrowserWindow, browserService: BrowserService): void {
 
   // Return the real home directory (avoids tilde expansion issues with shell:false)
   ipcMain.removeHandler('get-home-dir');
@@ -109,6 +110,41 @@ export function registerVideoExtractorIpc(win: BrowserWindow): void {
         }
       });
     });
+  });
+
+  // Search for a video using natural language and return the best URL
+  ipcMain.removeHandler('search-and-extract-url');
+  ipcMain.handle('search-and-extract-url', async (_event, { query }: { query: string }) => {
+    // Show the browser pane and navigate to YouTube search
+    await browserService.show();
+    const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
+    await browserService.navigate(searchUrl);
+
+    // Wait for search results to load then extract first video URL
+    const result = await browserService.evaluateJs(`
+      (() => {
+        const links = Array.from(document.querySelectorAll('a#video-title, a[href*="/watch?v="]'));
+        for (const link of links) {
+          const href = link.getAttribute('href');
+          if (href && href.includes('/watch?v=')) {
+            return 'https://www.youtube.com' + href.split('&')[0];
+          }
+        }
+        return null;
+      })()
+    `);
+
+    if (result.ok && result.data) {
+      return { url: result.data as string, platform: 'YouTube' };
+    }
+
+    // Fallback: try extracting from current page URL if we landed on a watch page
+    const pageResult = await browserService.evaluateJs(`window.location.href`);
+    if (pageResult.ok && typeof pageResult.data === 'string' && pageResult.data.includes('/watch?v=')) {
+      return { url: pageResult.data.split('&')[0], platform: 'YouTube' };
+    }
+
+    return { url: null, platform: null, error: 'No video found for that search' };
   });
 }
 

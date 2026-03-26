@@ -268,5 +268,6 @@ contextBridge.exposeInMainWorld('clawdia', {
       ipcRenderer.on('install-ytdlp-progress', handler);
       return () => ipcRenderer.removeListener('install-ytdlp-progress', handler);
     },
+    searchAndExtractUrl: (opts: { query: string }) => ipcRenderer.invoke('search-and-extract-url', opts),
   },
 });

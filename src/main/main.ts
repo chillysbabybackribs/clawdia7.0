@@ -39,7 +39,7 @@ app.whenReady().then(() => {
   const terminalController = new TerminalSessionController();
   registerIpc(browserService);
   registerTerminalIpc(terminalController, win);
-  registerVideoExtractorIpc(win);
+  registerVideoExtractorIpc(win, browserService);
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

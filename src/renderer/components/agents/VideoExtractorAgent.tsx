@@ -69,6 +69,10 @@ export default function VideoExtractorAgent({ isOpen, onToggle }: Props) {
     if (result?.path) setFolder(result.path);
   };
 
+  const isUrl = (text: string): boolean => {
+    return /^https?:\/\//i.test(text.trim()) || /^(www\.)/i.test(text.trim());
+  };
+
   const handleRun = async () => {
     if (!input.trim()) return;
     const api = (window as any).clawdia;
@@ -83,9 +87,25 @@ export default function VideoExtractorAgent({ isOpen, onToggle }: Props) {
         return;
       }
 
-      setStatus({ type: 'running', percent: null, line: 'Starting...' });
+      let downloadUrl = input.trim();
+
+      if (!isUrl(downloadUrl)) {
+        // Natural language — search and extract URL visually
+        setStatus({ type: 'running', percent: null, line: 'Searching platforms...' });
+        api.browser?.show();
+        const searchResult = await api.videoExtractor.searchAndExtractUrl({ query: downloadUrl });
+        if (!searchResult?.url) {
+          setStatus({ type: 'error', message: searchResult?.error ?? 'No video found' });
+          return;
+        }
+        downloadUrl = searchResult.url;
+        setStatus({ type: 'running', percent: null, line: `Found on ${searchResult.platform} — downloading...` });
+      } else {
+        setStatus({ type: 'running', percent: null, line: 'Starting...' });
+      }
+
       await api.videoExtractor.startDownload({
-        url: input.trim(),
+        url: downloadUrl,
         outputDir: folder,
         quality,
         format,
