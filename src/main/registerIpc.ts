@@ -439,7 +439,7 @@ export function registerIpc(browserService: ElectronBrowserService): void {
       description: input.description || '',
       agentType: input.agentType || 'general',
       status: 'draft',
-      goal: input.goal,
+      goal: input.goal ?? '',
       blueprint: input.blueprint,
       successDescription: input.successDescription,
       resourceScope: input.resourceScope || {},
