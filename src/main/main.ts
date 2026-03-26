@@ -4,6 +4,7 @@ import { ElectronBrowserService } from './core/browser/ElectronBrowserService';
 import { TerminalSessionController } from './core/terminal/TerminalSessionController';
 import { registerIpc } from './registerIpc';
 import { registerTerminalIpc } from './registerTerminalIpc';
+import { registerVideoExtractorIpc } from './ipc/videoExtractor';
 
 const isDev = process.env.NODE_ENV === 'development';
 
@@ -38,6 +39,7 @@ app.whenReady().then(() => {
   const terminalController = new TerminalSessionController();
   registerIpc(browserService);
   registerTerminalIpc(terminalController, win);
+  registerVideoExtractorIpc(win);
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
