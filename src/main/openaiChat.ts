@@ -191,7 +191,7 @@ export async function streamOpenAIChat({
           if (parsed.schemas) {
             for (const schema of parsed.schemas) {
               const oaiTool = toOpenAITool(schema);
-              if (!activeTools.find(t => t.function.name === schema.name)) {
+              if (!activeTools.find(t => (t as any).function?.name === schema.name)) {
                 activeTools.push(oaiTool);
               }
             }

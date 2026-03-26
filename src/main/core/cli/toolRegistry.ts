@@ -1,8 +1,11 @@
 // src/main/core/cli/toolRegistry.ts
 import type Anthropic from '@anthropic-ai/sdk';
 import { Type } from '@google/genai';
+import type OpenAI from 'openai';
 import { BROWSER_TOOLS } from './browserTools';
 import { SHELL_TOOLS_OPENAI } from './shellTools';
+
+type OAITool = OpenAI.Chat.Completions.ChatCompletionTool;
 
 // ── Canonical tool registry ───────────────────────────────────────────────────
 // All tools indexed by name. Shell tools are stored in Anthropic schema format
@@ -80,7 +83,7 @@ export function searchTools(opts: {
 }
 
 /** Convert Anthropic tool schema to OpenAI function tool format */
-export function toOpenAITool(tool: Anthropic.Tool): import('openai').Chat.ChatCompletionTool {
+export function toOpenAITool(tool: Anthropic.Tool): OAITool {
   return {
     type: 'function',
     function: {
@@ -117,7 +120,7 @@ export function toGeminiDeclaration(tool: Anthropic.Tool): Record<string, unknow
 // ── search_tools meta-tool schemas ───────────────────────────────────────────
 
 /** OpenAI function schema for the search_tools meta-tool */
-export const SEARCH_TOOL_OPENAI: import('openai').Chat.ChatCompletionTool = {
+export const SEARCH_TOOL_OPENAI: OAITool = {
   type: 'function',
   function: {
     name: 'search_tools',
