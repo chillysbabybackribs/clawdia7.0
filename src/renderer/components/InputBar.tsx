@@ -192,7 +192,7 @@ export default function InputBar({
 
   return (
     <div
-      className="px-4 pb-4 pt-3"
+      className="px-5 pb-5 pt-4"
       style={{
         background: '#0d0d12',
         borderTop: '2px solid rgba(255,255,255,0.07)',
@@ -329,7 +329,7 @@ export default function InputBar({
             ))}
           </div>
         )}
-        <div className="flex items-center px-3 py-2 gap-2">
+        <div className="flex items-center px-4 py-3 gap-2">
           <textarea
             ref={textareaRef}
             value={text}
@@ -339,7 +339,7 @@ export default function InputBar({
             onBlur={() => setFocused(false)}
             placeholder={isStreaming ? 'Add a follow-up...' : 'Ask me anything...'}
             rows={1}
-            className="flex-1 bg-transparent text-text-primary text-[16px] placeholder:text-text-tertiary px-2 py-2 resize-none outline-none max-h-[200px] leading-[1.6]"
+            className="flex-1 bg-transparent text-text-primary text-[21px] placeholder:text-text-tertiary px-3 py-3 resize-none outline-none max-h-[200px] leading-[1.6]"
           />
 
           <div className="flex items-center gap-1.5 no-drag relative flex-shrink-0">
