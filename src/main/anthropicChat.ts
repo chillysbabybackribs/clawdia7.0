@@ -7,7 +7,7 @@ import { BROWSER_TOOLS, executeBrowserTool } from './core/cli/browserTools';
 import { executeShellTool } from './core/cli/shellTools';
 import type { BrowserService } from './core/browser/BrowserService';
 import { truncateBrowserResult, truncateToolResult, SHELL_MAX } from './core/cli/truncate';
-import { SHARED_SYSTEM_PROMPT, ANTHROPIC_STREAM_SYSTEM_PROMPT } from './core/cli/systemPrompt';
+import { buildSharedSystemPrompt, buildAnthropicStreamSystemPrompt } from './core/cli/systemPrompt';
 
 /** Anthropic API accepts the same model ids as the in-app registry (e.g. claude-sonnet-4-6). */
 export function resolveAnthropicModelId(registryId: string): string {
@@ -77,6 +77,7 @@ type StreamParams = {
   signal: AbortSignal;
   /** When provided, browser tools are enabled in the chat loop */
   browserService?: BrowserService;
+  unrestrictedMode?: boolean;
 };
 
 import { exec } from 'child_process';
@@ -126,6 +127,7 @@ export async function streamAnthropicChat({
   sessionMessages,
   signal,
   browserService,
+  unrestrictedMode = false,
 }: StreamParams): Promise<{ response: string; error?: string }> {
   const client = new Anthropic({ apiKey });
   const apiModelId = resolveAnthropicModelId(modelRegistryId);
@@ -157,7 +159,7 @@ export async function streamAnthropicChat({
       system: [
         {
           type: 'text' as const,
-          text: ANTHROPIC_STREAM_SYSTEM_PROMPT,
+          text: buildAnthropicStreamSystemPrompt(unrestrictedMode),
           cache_control: { type: 'ephemeral' as const },
         },
       ] as any,
@@ -238,7 +240,7 @@ export async function streamAnthropicChat({
       model: apiModelId,
       max_tokens: 8192,
       messages,
-      system: SHARED_SYSTEM_PROMPT,
+      system: buildSharedSystemPrompt(unrestrictedMode),
       tools: [
         { type: 'tool_search_tool_bm25_20251119', name: 'tool_search_tool_bm25' } as any,
         ...ANTHROPIC_SHELL_TOOLS.map((t, i) =>
@@ -264,6 +266,7 @@ export async function streamAnthropicChat({
       const startMs = Date.now();
       let resultContent: string;
       let isError = false;
+      console.log(`[tool] ${block.name}`, JSON.stringify(block.input).slice(0, 120));
       try {
         if (SHELL_TOOL_NAMES.has(block.name)) {
           resultContent = await executeShellTool(block.name, block.input as Record<string, unknown>);
@@ -322,6 +325,7 @@ export async function streamAnthropicChat({
       while (turns < MAX_TOOL_TURNS) {
         turns++;
         const response = await runToolTurn(loopMessages);
+        console.log(`[anthropic] turn=${turns} stop=${response.stop_reason} blocks=${response.content.map(b => b.type).join(',')}`);
 
         // server_tool_use = tool search calls handled server-side; skip client execution
         const toolUseBlocks = response.content.filter(

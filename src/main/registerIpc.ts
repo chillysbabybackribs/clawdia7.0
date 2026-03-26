@@ -226,6 +226,7 @@ export function registerIpc(browserService: ElectronBrowserService): void {
         sessionMessages,
         signal: chatAbort.signal,
         browserService,
+        unrestrictedMode: settings.unrestrictedMode,
       });
     }
 
@@ -239,6 +240,7 @@ export function registerIpc(browserService: ElectronBrowserService): void {
         sessionMessages,
         signal: chatAbort.signal,
         browserService,
+        unrestrictedMode: settings.unrestrictedMode,
       });
     }
 
@@ -251,6 +253,7 @@ export function registerIpc(browserService: ElectronBrowserService): void {
       sessionMessages,
       signal: chatAbort.signal,
       browserService,
+      unrestrictedMode: settings.unrestrictedMode,
     });
   });
 

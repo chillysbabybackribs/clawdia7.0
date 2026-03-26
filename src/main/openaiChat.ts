@@ -8,7 +8,7 @@ import { executeBrowserTool } from './core/cli/browserTools';
 import { SEARCH_TOOL_OPENAI, executeSearchTools, toOpenAITool, searchTools } from './core/cli/toolRegistry';
 import type { BrowserService } from './core/browser/BrowserService';
 import { truncateBrowserResult } from './core/cli/truncate';
-import { SHARED_SYSTEM_PROMPT } from './core/cli/systemPrompt';
+import { buildSharedSystemPrompt } from './core/cli/systemPrompt';
 
 type OpenAIMessage = OpenAI.Chat.ChatCompletionMessageParam;
 
@@ -54,6 +54,7 @@ type StreamParams = {
   sessionMessages: OpenAIMessage[];
   signal: AbortSignal;
   browserService?: BrowserService;
+  unrestrictedMode?: boolean;
 };
 
 export async function streamOpenAIChat({
@@ -65,6 +66,7 @@ export async function streamOpenAIChat({
   sessionMessages,
   signal,
   browserService,
+  unrestrictedMode = false,
 }: StreamParams): Promise<{ response: string; error?: string }> {
   const client = new OpenAI({ apiKey });
 
@@ -86,7 +88,7 @@ export async function streamOpenAIChat({
     sessionMessages.push(userMessage);
 
     const loopMessages: OpenAIMessage[] = [
-      { role: 'system', content: SHARED_SYSTEM_PROMPT },
+      { role: 'system', content: buildSharedSystemPrompt(unrestrictedMode) },
       ...sessionMessages,
     ];
 

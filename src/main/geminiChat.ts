@@ -8,7 +8,7 @@ import { executeBrowserTool } from './core/cli/browserTools';
 import { getSearchToolGemini, executeSearchTools, toGeminiDeclaration, searchTools } from './core/cli/toolRegistry';
 import type { BrowserService } from './core/browser/BrowserService';
 import { truncateBrowserResult } from './core/cli/truncate';
-import { SHARED_SYSTEM_PROMPT } from './core/cli/systemPrompt';
+import { buildSharedSystemPrompt } from './core/cli/systemPrompt';
 
 // ── Module-level constants (kept for reference) ───────────────────────────────
 // GEMINI_TOOLS is no longer used directly in the loop — tools are loaded on demand
@@ -28,6 +28,7 @@ type StreamParams = {
     sessionMessages: any[];
     signal: AbortSignal;
     browserService?: BrowserService;
+    unrestrictedMode?: boolean;
 };
 
 // ── streamGeminiChat function ────────────────────────────────────────────────
@@ -41,6 +42,7 @@ export async function streamGeminiChat({
     sessionMessages,
     signal,
     browserService,
+    unrestrictedMode = false,
 }: StreamParams): Promise<{ response: string; error?: string; toolCalls?: any[] }> {
     // Use the optimized Google GenAI SDK
     const ai = new GoogleGenAI({ apiKey });
@@ -121,7 +123,7 @@ export async function streamGeminiChat({
             const chat = ai.chats.create({
                 model: modelRegistryId,
                 config: {
-                    systemInstruction: SHARED_SYSTEM_PROMPT,
+                    systemInstruction: buildSharedSystemPrompt(unrestrictedMode),
                     tools: activeGeminiTools,
                     temperature: 0,
                 },
