@@ -7,6 +7,7 @@ import { executeShellTool, SHELL_TOOLS_OPENAI } from './core/cli/shellTools';
 import { BROWSER_TOOLS, executeBrowserTool } from './core/cli/browserTools';
 import type { BrowserService } from './core/browser/BrowserService';
 import { truncateBrowserResult } from './core/cli/truncate';
+import { SHARED_SYSTEM_PROMPT } from './core/cli/systemPrompt';
 
 type OpenAIMessage = OpenAI.Chat.ChatCompletionMessageParam;
 
@@ -24,8 +25,6 @@ const ALL_TOOLS_OPENAI: OpenAI.Chat.ChatCompletionTool[] = [
   ...SHELL_TOOLS_OPENAI,
   ...BROWSER_TOOLS_OPENAI,
 ];
-
-const SYSTEM_PROMPT = `You have access to a local CLI environment and a browser. Use shell_exec to run shell commands, file_edit to read and edit files, and browser_* tools to navigate and interact with the browser. Use these tools efficiently. Do not wait for user permission unless the action is destructive.`;
 
 function buildUserContent(
   text: string,
@@ -100,7 +99,7 @@ export async function streamOpenAIChat({
     sessionMessages.push(userMessage);
 
     const loopMessages: OpenAIMessage[] = [
-      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'system', content: SHARED_SYSTEM_PROMPT },
       ...sessionMessages,
     ];
 

@@ -7,6 +7,60 @@ import { executeShellTool } from './core/cli/shellTools';
 import { BROWSER_TOOLS, executeBrowserTool } from './core/cli/browserTools';
 import type { BrowserService } from './core/browser/BrowserService';
 import { truncateBrowserResult } from './core/cli/truncate';
+import { SHARED_SYSTEM_PROMPT } from './core/cli/systemPrompt';
+
+// ── Module-level constants (computed once) ───────────────────────────────────
+
+const BROWSER_DECLARATIONS = BROWSER_TOOLS.map(t => ({
+    name: t.name,
+    description: t.description,
+    parameters: {
+        type: Type.OBJECT,
+        properties: Object.fromEntries(
+            Object.entries((t.input_schema as any).properties ?? {}).map(([k, v]: [string, any]) => [
+                k,
+                { type: v.type === 'number' ? Type.NUMBER : Type.STRING, description: v.description ?? '' },
+            ])
+        ),
+        required: (t.input_schema as any).required ?? [],
+    },
+}));
+
+const GEMINI_TOOLS = [{
+    functionDeclarations: [
+        {
+            name: 'shell_exec',
+            description: 'Execute a bash shell command and explore the local system.',
+            parameters: {
+                type: Type.OBJECT,
+                properties: {
+                    command: { type: Type.STRING, description: 'The shell command to run.' }
+                },
+                required: ['command']
+            }
+        },
+        {
+            name: 'file_edit',
+            description: 'Read and edit files on the local system.',
+            parameters: {
+                type: Type.OBJECT,
+                properties: {
+                    command: { type: Type.STRING, description: 'The action to perform: view, create, or str_replace.' },
+                    path: { type: Type.STRING, description: 'The file path.' },
+                    file_text: { type: Type.STRING, description: 'File content (if create)' },
+                    old_str: { type: Type.STRING, description: 'Text to replace (if str_replace)' },
+                    new_str: { type: Type.STRING, description: 'New text (if str_replace)' }
+                },
+                required: ['command', 'path']
+            }
+        },
+        ...BROWSER_DECLARATIONS,
+    ]
+}] as any;
+
+const MAX_TOOL_TURNS = 20;
+
+// ── StreamParams type ────────────────────────────────────────────────────────
 
 type StreamParams = {
     webContents: WebContents;
@@ -18,6 +72,8 @@ type StreamParams = {
     signal: AbortSignal;
     browserService?: BrowserService;
 };
+
+// ── streamGeminiChat function ────────────────────────────────────────────────
 
 export async function streamGeminiChat({
     webContents,
@@ -79,63 +135,17 @@ export async function streamGeminiChat({
         if (!webContents.isDestroyed()) webContents.send(IPC_EVENTS.CHAT_STREAM_TEXT, chunk);
     };
 
-    const systemInstruction = `You have access to a local CLI environment and a browser. Use shell_exec to run shell commands, file_edit to read and edit files, and browser_* tools to navigate and interact with the browser. Use these tools efficiently. Do not wait for user permission unless the action is destructive.`;
-
-    // Build browser tool declarations from BROWSER_TOOLS schemas
-    const browserDeclarations = BROWSER_TOOLS.map(t => ({
-        name: t.name,
-        description: t.description,
-        parameters: {
-            type: Type.OBJECT,
-            properties: Object.fromEntries(
-                Object.entries((t.input_schema as any).properties ?? {}).map(([k, v]: [string, any]) => [
-                    k,
-                    { type: v.type === 'number' ? Type.NUMBER : Type.STRING, description: v.description ?? '' },
-                ])
-            ),
-            required: (t.input_schema as any).required ?? [],
-        },
-    }));
-
-    const tools = [{
-        functionDeclarations: [
-            {
-                name: 'shell_exec',
-                description: 'Execute a bash shell command and explore the local system.',
-                parameters: {
-                    type: Type.OBJECT,
-                    properties: {
-                        command: { type: Type.STRING, description: 'The shell command to run.' }
-                    },
-                    required: ['command']
-                }
-            },
-            {
-                name: 'file_edit',
-                description: 'Read and edit files on the local system.',
-                parameters: {
-                    type: Type.OBJECT,
-                    properties: {
-                        command: { type: Type.STRING, description: 'The action to perform: view, create, or str_replace.' },
-                        path: { type: Type.STRING, description: 'The file path.' },
-                        file_text: { type: Type.STRING, description: 'File content (if create)' },
-                        old_str: { type: Type.STRING, description: 'Text to replace (if str_replace)' },
-                        new_str: { type: Type.STRING, description: 'New text (if str_replace)' }
-                    },
-                    required: ['command', 'path']
-                }
-            },
-            ...browserDeclarations,
-        ]
-    }] as any;
+    const sessionLengthBeforeRequest = sessionMessages.length;
 
     try {
         sessionMessages.push(userMessage);
 
         let allToolCalls: any[] = [];
         let finalResponseText = '';
+        let turns = 0;
 
-        while (true) {
+        while (turns < MAX_TOOL_TURNS) {
+            turns++;
             if (signal.aborted) throw new Error('AbortError');
 
             sendThinking('Gemini is thinking…');
@@ -143,8 +153,8 @@ export async function streamGeminiChat({
             const chat = ai.chats.create({
                 model: modelRegistryId,
                 config: {
-                    systemInstruction,
-                    tools,
+                    systemInstruction: SHARED_SYSTEM_PROMPT,
+                    tools: GEMINI_TOOLS,
                     temperature: 0,
                 },
                 history: sessionMessages.slice(0, -1), // Everything except the last turn
@@ -232,6 +242,11 @@ export async function streamGeminiChat({
             // The while loop continues and will send these results to the model
         }
 
+        if (turns >= MAX_TOOL_TURNS && finalResponseText === '') {
+            finalResponseText = '[Tool loop reached maximum turn limit]';
+            sendText(finalResponseText);
+        }
+
         if (!webContents.isDestroyed()) {
             webContents.send(IPC_EVENTS.CHAT_STREAM_END, { ok: true });
         }
@@ -243,7 +258,7 @@ export async function streamGeminiChat({
             if (!webContents.isDestroyed()) webContents.send(IPC_EVENTS.CHAT_STREAM_END, { ok: false, cancelled: true });
             return { response: '', error: 'Stopped' };
         }
-        sessionMessages.pop();
+        sessionMessages.splice(sessionLengthBeforeRequest);
         if (!webContents.isDestroyed()) {
             webContents.send(IPC_EVENTS.CHAT_STREAM_END, { ok: false, error: err.message });
         }

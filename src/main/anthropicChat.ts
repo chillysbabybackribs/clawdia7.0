@@ -6,6 +6,7 @@ import type { MessageAttachment } from '../shared/types';
 import { BROWSER_TOOLS, executeBrowserTool } from './core/cli/browserTools';
 import type { BrowserService } from './core/browser/BrowserService';
 import { truncateBrowserResult } from './core/cli/truncate';
+import { SHARED_SYSTEM_PROMPT } from './core/cli/systemPrompt';
 
 /** Anthropic API accepts the same model ids as the in-app registry (e.g. claude-sonnet-4-6). */
 export function resolveAnthropicModelId(registryId: string): string {
@@ -155,7 +156,7 @@ export async function streamAnthropicChat({
       system: [
         {
           type: 'text' as const,
-          text: `You have access to a local CLI environment. Use the native bash tool to execute shell commands and explore the system. Use the native str_replace_based_edit_tool tool to read and edit files. Use these tools efficiently to accomplish the user's tasks. Do not wait for user permission to use these tools unless it involves a destructive system change.`,
+          text: SHARED_SYSTEM_PROMPT,
           cache_control: { type: 'ephemeral' as const },
         },
       ] as any,
