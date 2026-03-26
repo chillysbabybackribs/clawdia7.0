@@ -1,6 +1,7 @@
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs';
+import { truncateToolResult, SHELL_MAX, FILE_MAX } from './truncate';
 
 const execAsync = promisify(exec);
 
@@ -10,13 +11,15 @@ export async function executeShellTool(name: string, args: Record<string, unknow
     if (name === 'shell_exec' || name === 'bash') {
       const command = (args.command ?? args.cmd) as string;
       const { stdout, stderr } = await execAsync(command);
-      return stdout || stderr || 'Command executed successfully with no output.';
+      const raw = stdout || stderr || 'Command executed successfully with no output.';
+      return truncateToolResult(raw, SHELL_MAX);
     }
     if (name === 'file_edit' || name === 'str_replace_based_edit_tool') {
       const cmd = args.command as string;
       const filePath = args.path as string;
       if (cmd === 'view') {
-        return fs.readFileSync(filePath, 'utf-8');
+        const raw = fs.readFileSync(filePath, 'utf-8');
+        return truncateToolResult(raw, FILE_MAX);
       }
       if (cmd === 'create') {
         fs.writeFileSync(filePath, (args.file_text as string) ?? '', 'utf-8');

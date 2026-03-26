@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { truncateToolResult, truncateBrowserResult, SHELL_MAX, FILE_MAX, BROWSER_MAX } from '../../../../src/main/core/cli/truncate';
+import { executeShellTool } from '../../../../src/main/core/cli/shellTools';
 
 describe('truncateToolResult', () => {
   it('returns short strings unchanged', () => {
@@ -42,5 +43,30 @@ describe('truncateBrowserResult', () => {
     const result = truncateBrowserResult(long);
     expect(result.length).toBeLessThanOrEqual(BROWSER_MAX);
     expect(result).toContain('[truncated');
+  });
+});
+
+describe('executeShellTool truncation', () => {
+  it('truncates stdout over SHELL_MAX', async () => {
+    const result = await executeShellTool('shell_exec', { command: `python3 -c "print('x' * 5000)"` });
+    expect(result.length).toBeLessThanOrEqual(SHELL_MAX);
+    expect(result).toContain('[truncated');
+  });
+
+  it('does not truncate short output', async () => {
+    const result = await executeShellTool('shell_exec', { command: 'echo hello' });
+    expect(result.trim()).toBe('hello');
+  });
+
+  it('truncates file view over FILE_MAX', async () => {
+    const fs = await import('fs');
+    const os = await import('os');
+    const path = await import('path');
+    const tmp = path.join(os.tmpdir(), 'clawdia-test-big.txt');
+    fs.writeFileSync(tmp, 'y'.repeat(FILE_MAX + 500));
+    const result = await executeShellTool('file_edit', { command: 'view', path: tmp });
+    expect(result.length).toBeLessThanOrEqual(FILE_MAX);
+    expect(result).toContain('[truncated');
+    fs.unlinkSync(tmp);
   });
 });
