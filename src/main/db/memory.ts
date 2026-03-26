@@ -211,6 +211,17 @@ export function getMemoryContext(userMessage: string): string {
 }
 
 /**
+ * Returns the total number of facts in user_memory. Used in tests.
+ */
+export function countMemories(): number {
+  try {
+    return (getDb().prepare(`SELECT COUNT(*) as n FROM user_memory`).get() as { n: number }).n;
+  } catch {
+    return 0;
+  }
+}
+
+/**
  * Prune user_memory to 180 entries (called automatically every 10 stores).
  * Never prunes source='user' facts. Deletes lowest-confidence agent facts first.
  */

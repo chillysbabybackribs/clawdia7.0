@@ -1,5 +1,5 @@
 // tests/main/db/memory.test.ts
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
@@ -8,13 +8,17 @@ const testDbPath = path.join(os.tmpdir(), `clawdia-memory-test-${Date.now()}.sql
 process.env.CLAWDIA_DB_PATH_OVERRIDE = testDbPath;
 
 import { initDb } from '../../../src/main/db';
-import { remember, forget, searchMemory, getMemoryContext, pruneMemories } from '../../../src/main/db/memory';
+import { remember, forget, searchMemory, getMemoryContext, pruneMemories, countMemories } from '../../../src/main/db/memory';
 
 beforeEach(() => {
   initDb();
 });
 
 afterEach(() => {
+  try { fs.unlinkSync(testDbPath); } catch {}
+});
+
+afterAll(() => {
   try { fs.unlinkSync(testDbPath); } catch {}
 });
 
@@ -127,13 +131,12 @@ describe('getMemoryContext', () => {
 });
 
 describe('pruneMemories', () => {
-  it('deletes lowest-confidence agent facts when over 200', () => {
+  it('prunes agent facts down to 180 when over 200', () => {
     for (let i = 0; i < 205; i++) {
       remember('fact', `key_${i}`, `value_${i}`, 'agent');
     }
     pruneMemories();
-    const results = searchMemory('value');
-    expect(results.length).toBeGreaterThan(0);
+    expect(countMemories()).toBeLessThanOrEqual(180);
   });
 
   it('never prunes source=user facts', () => {
@@ -144,5 +147,7 @@ describe('pruneMemories', () => {
     pruneMemories();
     const userFacts = searchMemory('Alice Smith');
     expect(userFacts.some(f => f.source === 'user')).toBe(true);
+    // Also verify count is actually reduced
+    expect(countMemories()).toBeLessThan(202);
   });
 });
