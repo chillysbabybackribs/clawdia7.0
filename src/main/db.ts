@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
+import { initMemory } from './db/memory';
 
 // Row types — plain data shapes matching the SQL schema exactly
 export interface ConversationRow {
@@ -63,6 +64,7 @@ export function initDb(): void {
     db = new Database(dbPath);
     db.pragma('journal_mode = WAL');
     db.pragma('foreign_keys = ON');
+    initMemory(db);
 
     db.exec(`
       CREATE TABLE IF NOT EXISTS conversations (
