@@ -279,8 +279,8 @@ export default function InputBar({
           relative flex flex-col rounded-xl transition-all duration-200
           bg-[#18181c] border
           ${focused
-            ? 'border-white/[0.12] shadow-[inset_0_1px_6px_rgba(0,0,0,0.3),0_-2px_10px_rgba(0,0,0,0.35),0_0_0_1px_rgba(255,255,255,0.04)]'
-            : 'border-white/[0.06] hover:border-white/[0.09] shadow-[inset_0_1px_4px_rgba(0,0,0,0.2),0_-2px_8px_rgba(0,0,0,0.25)]'
+            ? 'border-[1.5px] border-white/[0.22] shadow-[inset_0_1px_6px_rgba(0,0,0,0.3),0_-2px_10px_rgba(0,0,0,0.35),0_0_0_1px_rgba(255,255,255,0.04)]'
+            : 'border-[1.5px] border-white/[0.12] hover:border-white/[0.16] shadow-[inset_0_1px_4px_rgba(0,0,0,0.2),0_-2px_8px_rgba(0,0,0,0.25)]'
           }
         `}
       >
