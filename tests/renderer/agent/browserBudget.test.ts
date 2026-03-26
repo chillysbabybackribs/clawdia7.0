@@ -46,8 +46,12 @@ describe('browserBudget', () => {
 
   it('updateBrowserBudget tracks inspected targets for extract_text', () => {
     const state = initBrowserBudget();
-    state.inspectedTargets.add('https://example.com');
-    expect(state.inspectedTargets.size).toBe(1);
+    updateBrowserBudget(
+      [{ id: 'x', name: 'browser_extract_text', input: {} }],
+      ['{"url":"https://example.com","text":"hello"}'],
+      state,
+    );
+    expect(state.inspectedTargets.has('https://example.com')).toBe(true);
   });
 
   it('checkToolPolicy blocks absolute paths in file_edit create', () => {
