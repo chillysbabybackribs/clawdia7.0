@@ -238,6 +238,7 @@ export async function streamAnthropicChat({
     return results;
   };
 
+  const sessionLengthBeforeRequest = sessionMessages.length;
   try {
     sessionMessages.push(userMessage);
 
@@ -286,7 +287,7 @@ export async function streamAnthropicChat({
         loopMessages.push({ role: 'assistant', content: response.content });
 
         // If no tool calls, we're done
-        if (toolUseBlocks.length === 0 || response.stop_reason === 'end_turn') {
+        if (toolUseBlocks.length === 0) {
           break;
         }
 
@@ -299,6 +300,13 @@ export async function streamAnthropicChat({
       // first user message we already pushed above)
       for (let i = messagesForRequest.length; i < loopMessages.length; i++) {
         sessionMessages.push(loopMessages[i]);
+      }
+
+      if (turns >= MAX_TOOL_TURNS && assistantText === '') {
+        assistantText = '[Browser tool loop reached maximum turn limit without producing a response.]';
+        if (!webContents.isDestroyed()) {
+          webContents.send(IPC_EVENTS.CHAT_STREAM_TEXT, assistantText);
+        }
       }
     }
 
@@ -322,7 +330,7 @@ export async function streamAnthropicChat({
       if (!webContents.isDestroyed()) webContents.send(IPC_EVENTS.CHAT_STREAM_END, { ok: false, cancelled: true });
       return { response: '', error: 'Stopped' };
     }
-    sessionMessages.pop();
+    sessionMessages.splice(sessionLengthBeforeRequest);
     if (!webContents.isDestroyed()) {
       webContents.send(IPC_EVENTS.CHAT_STREAM_END, { ok: false, error: err.message });
     }
