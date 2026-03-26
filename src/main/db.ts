@@ -135,19 +135,22 @@ export function initDb(): void {
       CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
         content,
         content=messages,
-        content_rowid=id
+        content_rowid=rowid
       );
 
       CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
-        INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
+        INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
       END;
       CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
-        INSERT INTO messages_fts(messages_fts, rowid, content) VALUES ('delete', old.id, old.content);
+        INSERT INTO messages_fts(messages_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
       END;
       CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
-        INSERT INTO messages_fts(messages_fts, rowid, content) VALUES ('delete', old.id, old.content);
-        INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
+        INSERT INTO messages_fts(messages_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
+        INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
       END;
+
+      INSERT OR IGNORE INTO messages_fts(rowid, content)
+        SELECT rowid, content FROM messages;
     `);
 
     // Mark orphaned runs as failed (app was killed mid-run)
