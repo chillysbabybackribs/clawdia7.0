@@ -9,6 +9,17 @@ import { streamAnthropicChat } from './anthropicChat';
 import { streamGeminiChat } from './geminiChat';
 import { streamOpenAIChat } from './openaiChat';
 import { loadSettings, patchSettings, type AppSettings } from './settingsStore';
+import {
+  createConversation,
+  listConversations,
+  getConversation,
+  updateConversation,
+  deleteConversation,
+  addMessage,
+  getMessages,
+  getRuns,
+  getRunEvents,
+} from './db';
 
 function getMainWindow(): BrowserWindow | undefined {
   return BrowserWindow.getAllWindows()[0];
@@ -167,18 +178,58 @@ export function registerIpc(browserService: ElectronBrowserService): void {
 
   ipcMain.handle(IPC.CHAT_NEW, () => {
     chatAbort?.abort();
-    activeConversationId = `conv-${Date.now()}`;
-    sessions.set(activeConversationId, []);
-    return { id: activeConversationId };
+    const now = Date.now();
+    const id = `conv-${now}`;
+    createConversation({ id, title: 'New conversation', mode: 'chat', created_at: now, updated_at: now });
+    activeConversationId = id;
+    sessions.set(id, []);
+    return { id };
   });
 
-  ipcMain.handle(IPC.CHAT_LIST, () => []);
+  ipcMain.handle(IPC.CHAT_LIST, () => {
+    return listConversations().map((row) => ({
+      id: row.id,
+      title: row.title,
+      updatedAt: new Date(row.updated_at).toISOString(),
+      mode: row.mode,
+    }));
+  });
 
   ipcMain.handle(IPC.CHAT_LOAD, (_e, id: string) => {
     activeConversationId = id;
-    const msg = getOrCreateSession(id);
+
+    // Hydrate in-memory session from DB if not already loaded
+    if (!sessions.has(id)) {
+      const rows = getMessages(id);
+      const apiMessages: any[] = rows
+        .filter((r) => r.role === 'user' || r.role === 'assistant')
+        .map((r) => {
+          try {
+            const parsed = JSON.parse(r.content);
+            return { role: r.role, content: parsed.content ?? r.content };
+          } catch {
+            return { role: r.role, content: r.content };
+          }
+        });
+      sessions.set(id, apiMessages);
+    }
+
+    const rows = getMessages(id);
+    const messages: Message[] = rows.map((r) => {
+      try {
+        return JSON.parse(r.content) as Message;
+      } catch {
+        return {
+          id: r.id,
+          role: r.role as 'user' | 'assistant',
+          content: r.content,
+          timestamp: new Date(r.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+        };
+      }
+    });
+
     return {
-      messages: toUiMessages(msg),
+      messages,
       mode: 'chat' as const,
       claudeTerminalStatus: 'idle' as const,
     };
@@ -205,8 +256,21 @@ export function registerIpc(browserService: ElectronBrowserService): void {
 
     ensureConversation();
     const id = activeConversationId!;
+
+    // Ensure conversation exists in DB (handles legacy in-memory-only convs)
+    if (!getConversation(id)) {
+      const now = Date.now();
+      createConversation({ id, title: text.slice(0, 60) || 'New conversation', mode: 'chat', created_at: now, updated_at: now });
+    }
+
+    // Persist user message
+    const userMsgId = `msg-u-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const userMsgTs = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    const userMsg: Message = { id: userMsgId, role: 'user', content: text, timestamp: userMsgTs, attachments };
+    addMessage({ id: userMsgId, conversation_id: id, role: 'user', content: JSON.stringify(userMsg), created_at: Date.now() });
+    updateConversation(id, { updated_at: Date.now() });
+
     let sessionMessages = getOrCreateSession(id);
-    // Prune to sliding window before building request
     const pruned = pruneSession(sessionMessages);
     if (pruned.length < sessionMessages.length) {
       sessions.set(id, pruned);
@@ -216,8 +280,34 @@ export function registerIpc(browserService: ElectronBrowserService): void {
     chatAbort?.abort();
     chatAbort = new AbortController();
 
+    let result: { response: string; error?: string };
+
     if (settings.provider === 'gemini') {
-      return streamGeminiChat({
+      result = await streamGeminiChat({
+        webContents: event.sender,
+        apiKey,
+        modelRegistryId: model,
+        userText: text,
+        attachments,
+        sessionMessages,
+        signal: chatAbort.signal,
+        browserService,
+        unrestrictedMode: settings.unrestrictedMode,
+      });
+    } else if (settings.provider === 'openai') {
+      result = await streamOpenAIChat({
+        webContents: event.sender,
+        apiKey,
+        modelRegistryId: model,
+        userText: text,
+        attachments,
+        sessionMessages,
+        signal: chatAbort.signal,
+        browserService,
+        unrestrictedMode: settings.unrestrictedMode,
+      });
+    } else {
+      result = await streamAnthropicChat({
         webContents: event.sender,
         apiKey,
         modelRegistryId: model,
@@ -230,31 +320,16 @@ export function registerIpc(browserService: ElectronBrowserService): void {
       });
     }
 
-    if (settings.provider === 'openai') {
-      return streamOpenAIChat({
-        webContents: event.sender,
-        apiKey,
-        modelRegistryId: model,
-        userText: text,
-        attachments,
-        sessionMessages,
-        signal: chatAbort.signal,
-        browserService,
-        unrestrictedMode: settings.unrestrictedMode,
-      });
+    // Persist assistant message after streaming completes
+    if (result.response && !result.error) {
+      const assistantMsgId = `msg-a-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const assistantMsgTs = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      const assistantMsg: Message = { id: assistantMsgId, role: 'assistant', content: result.response, timestamp: assistantMsgTs };
+      addMessage({ id: assistantMsgId, conversation_id: id, role: 'assistant', content: JSON.stringify(assistantMsg), created_at: Date.now() });
+      updateConversation(id, { updated_at: Date.now(), title: text.slice(0, 60) || 'New conversation' });
     }
 
-    return streamAnthropicChat({
-      webContents: event.sender,
-      apiKey,
-      modelRegistryId: model,
-      userText: text,
-      attachments,
-      sessionMessages,
-      signal: chatAbort.signal,
-      browserService,
-      unrestrictedMode: settings.unrestrictedMode,
-    });
+    return result;
   });
 
   ipcMain.handle(IPC.CHAT_STOP, () => {
@@ -266,7 +341,19 @@ export function registerIpc(browserService: ElectronBrowserService): void {
   ipcMain.handle(IPC.CHAT_RESUME, () => { });
   ipcMain.handle(IPC.CHAT_ADD_CONTEXT, () => { });
   ipcMain.handle(IPC.CHAT_RATE_TOOL, () => { });
-  ipcMain.handle(IPC.CHAT_DELETE, () => { });
+
+  ipcMain.handle(IPC.RUN_LIST, (_e, conversationId: string) => {
+    return getRuns(conversationId);
+  });
+
+  ipcMain.handle(IPC.RUN_EVENTS, (_e, runId: string) => {
+    return getRunEvents(runId);
+  });
+  ipcMain.handle(IPC.CHAT_DELETE, (_e, id: string) => {
+    deleteConversation(id);
+    sessions.delete(id);
+    if (activeConversationId === id) activeConversationId = null;
+  });
   ipcMain.handle(IPC.CHAT_OPEN_ATTACHMENT, () => { });
 
   ipcMain.handle(IPC.TASKS_SUMMARY, () => ({ runningCount: 0, completedCount: 0 }));
