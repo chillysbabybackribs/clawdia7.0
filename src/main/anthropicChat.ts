@@ -204,15 +204,22 @@ export async function streamAnthropicChat({
   const runToolTurn = async (
     messages: Anthropic.MessageParam[],
   ): Promise<Anthropic.Message> => {
+    // Browser tools are deferred — the model searches for them via tool_search_tool_bm25
+    // rather than loading all schemas into every request's context window.
+    const deferredBrowserTools = BROWSER_TOOLS.map((t, i) => ({
+      ...t,
+      defer_loading: true,
+      ...(i === BROWSER_TOOLS.length - 1 ? { cache_control: { type: 'ephemeral' as const } } : {}),
+    }));
+
     const body: Anthropic.MessageCreateParams = {
       model: apiModelId,
       max_tokens: 8192,
       messages,
-      tools: BROWSER_TOOLS.map((t, i) =>
-        i === BROWSER_TOOLS.length - 1
-          ? { ...t, cache_control: { type: 'ephemeral' as const } }
-          : t
-      ) as any,
+      tools: [
+        { type: 'tool_search_tool_bm25_20251119', name: 'tool_search_tool_bm25' } as any,
+        ...deferredBrowserTools,
+      ] as any,
     };
     return client.messages.create(body, { signal });
   };
@@ -278,6 +285,7 @@ export async function streamAnthropicChat({
         turns++;
         const response = await runToolTurn(loopMessages);
 
+        // server_tool_use = tool search calls handled server-side; skip client execution
         const toolUseBlocks = response.content.filter(
           (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use',
         );
