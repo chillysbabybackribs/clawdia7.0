@@ -1,0 +1,12 @@
+appId: com.clawdia.app7
+productName: Clawdia 7.0
+directories:
+  output: dist-packaged
+files:
+  - dist/main/**/*
+  - dist/renderer/**/*
+  - dist/shared/**/*
+  - package.json
+linux:
+  target: AppImage
+  category: Utility
