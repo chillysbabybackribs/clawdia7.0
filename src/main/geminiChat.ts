@@ -9,6 +9,7 @@ import { getSearchToolGemini, executeSearchTools, toGeminiDeclaration, searchToo
 import type { BrowserService } from './core/browser/BrowserService';
 import { truncateBrowserResult } from './core/cli/truncate';
 import { buildSharedSystemPrompt } from './core/cli/systemPrompt';
+import { startRun, trackToolCall, trackToolResult, completeRun, failRun } from './runTracker';
 
 // ── Module-level constants (kept for reference) ───────────────────────────────
 // GEMINI_TOOLS is no longer used directly in the loop — tools are loaded on demand
@@ -29,6 +30,7 @@ type StreamParams = {
     signal: AbortSignal;
     browserService?: BrowserService;
     unrestrictedMode?: boolean;
+    conversationId?: string;
 };
 
 // ── streamGeminiChat function ────────────────────────────────────────────────
@@ -43,9 +45,11 @@ export async function streamGeminiChat({
     signal,
     browserService,
     unrestrictedMode = false,
+    conversationId,
 }: StreamParams): Promise<{ response: string; error?: string; toolCalls?: any[] }> {
     // Use the optimized Google GenAI SDK
     const ai = new GoogleGenAI({ apiKey });
+    const runId = conversationId ? startRun(conversationId, 'gemini', modelRegistryId) : null;
 
     // Map attachments to Gemini inlineData
     const parts: any[] = [];
@@ -175,6 +179,9 @@ export async function streamGeminiChat({
                 const uiName = fc.name;
                 const detail = fc.name === 'shell_exec' ? fc.args.command : JSON.stringify(fc.args);
                 const tcId = `tc-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+                const tcStartMs = Date.now();
+                const argsSummary = JSON.stringify(fc.args).slice(0, 120);
+                const eventId = (runId && fc.name !== 'search_tools') ? trackToolCall(runId, fc.name, argsSummary) : '';
 
                 const tcObj = { id: tcId, name: uiName, status: 'running' as const, detail };
                 allToolCalls.push(tcObj);
@@ -222,6 +229,10 @@ export async function streamGeminiChat({
                     resultStr = await executeShellTool(fc.name, fc.args as Record<string, unknown>);
                 }
 
+                if (runId && eventId) {
+                    trackToolResult(runId, eventId, resultStr.slice(0, 200), Date.now() - tcStartMs);
+                }
+
                 toolResultParts.push({
                     functionResponse: {
                         name: fc.name,
@@ -252,13 +263,16 @@ export async function streamGeminiChat({
             webContents.send(IPC_EVENTS.CHAT_STREAM_END, { ok: true });
         }
 
+        if (runId) completeRun(runId, 0, 0);
         return { response: finalResponseText, toolCalls: allToolCalls };
     } catch (e: unknown) {
         const err = e instanceof Error ? e : new Error(String(e));
         if (err.name === 'AbortError') {
+            if (runId) failRun(runId, 'Cancelled by user');
             if (!webContents.isDestroyed()) webContents.send(IPC_EVENTS.CHAT_STREAM_END, { ok: false, cancelled: true });
             return { response: '', error: 'Stopped' };
         }
+        if (runId) failRun(runId, err.message);
         sessionMessages.splice(sessionLengthBeforeRequest);
         if (!webContents.isDestroyed()) {
             webContents.send(IPC_EVENTS.CHAT_STREAM_END, { ok: false, error: err.message });

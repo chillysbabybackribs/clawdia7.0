@@ -8,6 +8,7 @@ import { executeShellTool } from './core/cli/shellTools';
 import type { BrowserService } from './core/browser/BrowserService';
 import { truncateBrowserResult, truncateToolResult, SHELL_MAX } from './core/cli/truncate';
 import { buildSharedSystemPrompt, buildAnthropicStreamSystemPrompt } from './core/cli/systemPrompt';
+import { startRun, trackToolCall, trackToolResult, completeRun, failRun } from './runTracker';
 
 /** Anthropic API accepts the same model ids as the in-app registry (e.g. claude-sonnet-4-6). */
 export function resolveAnthropicModelId(registryId: string): string {
@@ -78,6 +79,7 @@ type StreamParams = {
   /** When provided, browser tools are enabled in the chat loop */
   browserService?: BrowserService;
   unrestrictedMode?: boolean;
+  conversationId?: string;
 };
 
 import { exec } from 'child_process';
@@ -128,9 +130,11 @@ export async function streamAnthropicChat({
   signal,
   browserService,
   unrestrictedMode = false,
+  conversationId,
 }: StreamParams): Promise<{ response: string; error?: string }> {
   const client = new Anthropic({ apiKey });
   const apiModelId = resolveAnthropicModelId(modelRegistryId);
+  const runId = conversationId ? startRun(conversationId, 'anthropic', apiModelId) : null;
   const userContent = buildUserContent(userText, attachments);
 
   const userMessage: Anthropic.MessageParam = {
@@ -267,6 +271,8 @@ export async function streamAnthropicChat({
       let resultContent: string;
       let isError = false;
       console.log(`[tool] ${block.name}`, JSON.stringify(block.input).slice(0, 120));
+      const argsSummary = JSON.stringify(block.input).slice(0, 120);
+      const eventId = runId ? trackToolCall(runId, block.name, argsSummary) : '';
       try {
         if (SHELL_TOOL_NAMES.has(block.name)) {
           resultContent = await executeShellTool(block.name, block.input as Record<string, unknown>);
@@ -280,6 +286,9 @@ export async function streamAnthropicChat({
         isError = true;
       }
       const durationMs = Date.now() - startMs;
+      if (runId && eventId) {
+        trackToolResult(runId, eventId, resultContent.slice(0, 200), durationMs);
+      }
       if (!webContents.isDestroyed()) {
         webContents.send(IPC_EVENTS.CHAT_TOOL_ACTIVITY, {
           id: block.id,
@@ -385,13 +394,16 @@ export async function streamAnthropicChat({
       webContents.send(IPC_EVENTS.CHAT_STREAM_END, { ok: true });
     }
 
+    if (runId) completeRun(runId, 0, 0);
     return { response: assistantText };
   } catch (e: unknown) {
     const err = e instanceof Error ? e : new Error(String(e));
     if (err.name === 'AbortError') {
+      if (runId) failRun(runId, 'Cancelled by user');
       if (!webContents.isDestroyed()) webContents.send(IPC_EVENTS.CHAT_STREAM_END, { ok: false, cancelled: true });
       return { response: '', error: 'Stopped' };
     }
+    if (runId) failRun(runId, err.message);
     sessionMessages.splice(sessionLengthBeforeRequest);
     if (!webContents.isDestroyed()) {
       webContents.send(IPC_EVENTS.CHAT_STREAM_END, { ok: false, error: err.message });

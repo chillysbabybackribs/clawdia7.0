@@ -9,6 +9,7 @@ import { SEARCH_TOOL_OPENAI, executeSearchTools, toOpenAITool, searchTools } fro
 import type { BrowserService } from './core/browser/BrowserService';
 import { truncateBrowserResult } from './core/cli/truncate';
 import { buildSharedSystemPrompt } from './core/cli/systemPrompt';
+import { startRun, trackToolCall, trackToolResult, completeRun, failRun } from './runTracker';
 
 type OpenAIMessage = OpenAI.Chat.ChatCompletionMessageParam;
 
@@ -55,6 +56,7 @@ type StreamParams = {
   signal: AbortSignal;
   browserService?: BrowserService;
   unrestrictedMode?: boolean;
+  conversationId?: string;
 };
 
 export async function streamOpenAIChat({
@@ -67,8 +69,10 @@ export async function streamOpenAIChat({
   signal,
   browserService,
   unrestrictedMode = false,
+  conversationId,
 }: StreamParams): Promise<{ response: string; error?: string }> {
   const client = new OpenAI({ apiKey });
+  const runId = conversationId ? startRun(conversationId, 'openai', modelRegistryId) : null;
 
   const userContent = buildUserContent(userText, attachments);
   const userMessage: OpenAIMessage = { role: 'user', content: userContent };
@@ -171,6 +175,8 @@ export async function streamOpenAIChat({
       for (const [idx, tc] of Object.entries(toolCallAccumulators)) {
         const toolCallId = toolCallIds[idx];
         const startMs = Date.now();
+        const argsSummary = tc.args.slice(0, 120);
+        const eventId = (runId && tc.name !== 'search_tools') ? trackToolCall(runId, tc.name, argsSummary) : '';
         let resultStr: string;
 
         let args: Record<string, unknown> = {};
@@ -228,6 +234,9 @@ export async function streamOpenAIChat({
         }
 
         const durationMs = Date.now() - startMs;
+        if (runId && eventId) {
+          trackToolResult(runId, eventId, resultStr.slice(0, 200), durationMs);
+        }
         if (!webContents.isDestroyed()) {
           webContents.send(IPC_EVENTS.CHAT_TOOL_ACTIVITY, {
             id: toolCallId,
@@ -260,13 +269,16 @@ export async function streamOpenAIChat({
       webContents.send(IPC_EVENTS.CHAT_STREAM_END, { ok: true });
     }
 
+    if (runId) completeRun(runId, 0, 0);
     return { response: fullText };
   } catch (e: unknown) {
     const err = e instanceof Error ? e : new Error(String(e));
     if (err.name === 'AbortError' || (err as NodeJS.ErrnoException).code === 'ERR_CANCELED') {
+      if (runId) failRun(runId, 'Cancelled by user');
       if (!webContents.isDestroyed()) webContents.send(IPC_EVENTS.CHAT_STREAM_END, { ok: false, cancelled: true });
       return { response: '', error: 'Stopped' };
     }
+    if (runId) failRun(runId, err.message);
     sessionMessages.splice(sessionLengthBeforeRequest);
     if (!webContents.isDestroyed()) {
       webContents.send(IPC_EVENTS.CHAT_STREAM_END, { ok: false, error: err.message });

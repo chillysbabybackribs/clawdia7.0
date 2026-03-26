@@ -293,6 +293,7 @@ export function registerIpc(browserService: ElectronBrowserService): void {
         signal: chatAbort.signal,
         browserService,
         unrestrictedMode: settings.unrestrictedMode,
+        conversationId: id,
       });
     } else if (settings.provider === 'openai') {
       result = await streamOpenAIChat({
@@ -305,6 +306,7 @@ export function registerIpc(browserService: ElectronBrowserService): void {
         signal: chatAbort.signal,
         browserService,
         unrestrictedMode: settings.unrestrictedMode,
+        conversationId: id,
       });
     } else {
       result = await streamAnthropicChat({
@@ -317,6 +319,7 @@ export function registerIpc(browserService: ElectronBrowserService): void {
         signal: chatAbort.signal,
         browserService,
         unrestrictedMode: settings.unrestrictedMode,
+        conversationId: id,
       });
     }
 
