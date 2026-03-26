@@ -94,7 +94,7 @@ export const BROWSER_TOOLS: Anthropic.Tool[] = [
   },
   {
     name: 'browser_screenshot',
-    description: 'Take a screenshot of the current browser view. Returns the file path.',
+    description: 'Take a screenshot of the current browser view. Returns base64-encoded PNG that you can inspect visually.',
     input_schema: {
       type: 'object' as const,
       properties: {},
@@ -136,6 +136,72 @@ export const BROWSER_TOOLS: Anthropic.Tool[] = [
       type: 'object' as const,
       properties: {},
     },
+  },
+  {
+    name: 'browser_select',
+    description: 'Select an option in a <select> dropdown by value or visible text.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        selector: { type: 'string', description: 'CSS selector of the <select> element' },
+        value: { type: 'string', description: 'Option value or visible text to select' },
+      },
+      required: ['selector', 'value'],
+    },
+  },
+  {
+    name: 'browser_hover',
+    description: 'Hover over an element to trigger mouseover/mouseenter events (reveals dropdowns, tooltips, menus).',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        selector: { type: 'string', description: 'CSS selector of the element to hover' },
+      },
+      required: ['selector'],
+    },
+  },
+  {
+    name: 'browser_key_press',
+    description: 'Press a keyboard key. Use for Enter (submit forms), Escape (close modals), Tab (focus next field), ArrowDown/ArrowUp (navigate lists).',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        key: { type: 'string', description: 'Key name e.g. "Return", "Escape", "Tab", "ArrowDown", "ArrowUp"' },
+      },
+      required: ['key'],
+    },
+  },
+  {
+    name: 'browser_close_tab',
+    description: 'Close a browser tab by its ID. Use browser_list_tabs to get tab IDs.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        id: { type: 'string', description: 'Tab ID to close' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'browser_get_element_text',
+    description: 'Get the visible text content of a specific element. More token-efficient than extract_text when you only need one element.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        selector: { type: 'string', description: 'CSS selector of the element' },
+      },
+      required: ['selector'],
+    },
+  },
+  {
+    name: 'browser_back',
+    description: 'Navigate back in browser history.',
+    input_schema: { type: 'object' as const, properties: {} },
+  },
+  {
+    name: 'browser_forward',
+    description: 'Navigate forward in browser history.',
+    input_schema: { type: 'object' as const, properties: {} },
   },
 ];
 
@@ -180,7 +246,16 @@ export async function executeBrowserTool(
       return browser.getPageState();
     case 'browser_screenshot': {
       const shot = await browser.screenshot();
-      return { path: shot.path };
+      // Read the PNG back as base64 so multimodal models can see it
+      const { readFileSync } = await import('fs');
+      const b64 = readFileSync(shot.path).toString('base64');
+      return {
+        type: 'base64',
+        mimeType: shot.mimeType,
+        data: b64,
+        width: shot.width,
+        height: shot.height,
+      };
     }
     case 'browser_extract_text':
       return browser.extractText();
@@ -193,6 +268,23 @@ export async function executeBrowserTool(
       return { ok: true };
     case 'browser_list_tabs':
       return browser.listTabs();
+    case 'browser_select':
+      return browser.select(input.selector as string, input.value as string);
+    case 'browser_hover':
+      return browser.hover(input.selector as string);
+    case 'browser_key_press':
+      return browser.keyPress(input.key as string);
+    case 'browser_close_tab':
+      await browser.closeTab(input.id as string);
+      return { ok: true };
+    case 'browser_get_element_text':
+      return browser.getElementText(input.selector as string);
+    case 'browser_back':
+      await browser.back();
+      return { ok: true };
+    case 'browser_forward':
+      await browser.forward();
+      return { ok: true };
     default:
       return { ok: false, error: `Unknown browser tool: ${name}` };
   }

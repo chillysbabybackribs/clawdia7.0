@@ -14,6 +14,30 @@ export async function executeShellTool(name: string, args: Record<string, unknow
       const raw = stdout || stderr || 'Command executed successfully with no output.';
       return truncateToolResult(raw, SHELL_MAX);
     }
+    if (name === 'file_list_directory') {
+      const dirPath = args.path as string;
+      const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+      const result = entries.map(e => ({
+        name: e.name,
+        type: e.isDirectory() ? 'directory' : 'file',
+        size: e.isFile() ? fs.statSync(`${dirPath}/${e.name}`).size : undefined,
+      }));
+      return JSON.stringify(result);
+    }
+    if (name === 'file_search') {
+      const pattern = args.pattern as string;
+      const searchPath = (args.path as string) || '.';
+      const glob = (args.glob as string) || '*';
+      const { stdout } = await execAsync(
+        `grep -rn --include=${JSON.stringify(glob)} -m 5 ${JSON.stringify(pattern)} ${JSON.stringify(searchPath)} 2>/dev/null || true`
+      );
+      const lines = stdout.trim().split('\n').filter(Boolean).slice(0, 20);
+      const matches = lines.map(line => {
+        const m = line.match(/^(.+?):(\d+):(.*)$/);
+        return m ? { file: m[1], line: parseInt(m[2]), text: m[3].trim() } : { raw: line };
+      });
+      return truncateToolResult(JSON.stringify(matches), SHELL_MAX);
+    }
     if (name === 'file_edit' || name === 'str_replace_based_edit_tool') {
       const cmd = args.command as string;
       const filePath = args.path as string;
@@ -72,6 +96,36 @@ export const SHELL_TOOLS_OPENAI = [
           new_str: { type: 'string', description: 'Replacement text (required for str_replace).' },
         },
         required: ['command', 'path'],
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'file_list_directory',
+      description: 'List the contents of a directory. Returns structured JSON with name, type, and size.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Absolute directory path to list.' },
+        },
+        required: ['path'],
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'file_search',
+      description: 'Search for a pattern in files. Returns structured JSON matches with file path, line number, and matching text.',
+      parameters: {
+        type: 'object',
+        properties: {
+          pattern: { type: 'string', description: 'Search pattern (regex).' },
+          path:    { type: 'string', description: 'Directory to search in (default: current directory).' },
+          glob:    { type: 'string', description: 'File glob pattern to filter (e.g. "*.ts", "*.py"). Default: all files.' },
+        },
+        required: ['pattern'],
       },
     },
   },

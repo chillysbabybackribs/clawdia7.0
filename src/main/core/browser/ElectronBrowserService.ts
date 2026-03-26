@@ -429,6 +429,82 @@ export class ElectronBrowserService implements BrowserService {
     }
   }
 
+  async select(selector: string, value: string): Promise<BrowserServiceResult> {
+    const wc = this.getActiveWebContents();
+    if (!wc) return { ok: false, error: 'No active browser tab' };
+    try {
+      const found = await wc.executeJavaScript(`
+        (function() {
+          const el = document.querySelector(${JSON.stringify(selector)});
+          if (!el || el.tagName.toLowerCase() !== 'select') return false;
+          // Try matching by value first, then by visible text
+          const optByValue = Array.from(el.options).find(o => o.value === ${JSON.stringify(value)});
+          const optByText  = Array.from(el.options).find(o => o.text.trim() === ${JSON.stringify(value)});
+          const opt = optByValue || optByText;
+          if (!opt) return false;
+          el.value = opt.value;
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+          el.dispatchEvent(new Event('input',  { bubbles: true }));
+          return true;
+        })()
+      `);
+      if (!found) return { ok: false, error: `Select element or option not found: ${selector} / ${value}` };
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: (err as Error).message };
+    }
+  }
+
+  async hover(selector: string): Promise<BrowserServiceResult> {
+    const wc = this.getActiveWebContents();
+    if (!wc) return { ok: false, error: 'No active browser tab' };
+    try {
+      const found = await wc.executeJavaScript(`
+        (function() {
+          const el = document.querySelector(${JSON.stringify(selector)});
+          if (!el) return false;
+          el.dispatchEvent(new MouseEvent('mouseover',  { bubbles: true }));
+          el.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+          return true;
+        })()
+      `);
+      if (!found) return { ok: false, error: `Element not found: ${selector}` };
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: (err as Error).message };
+    }
+  }
+
+  async keyPress(key: string): Promise<BrowserServiceResult> {
+    const wc = this.getActiveWebContents();
+    if (!wc) return { ok: false, error: 'No active browser tab' };
+    try {
+      wc.sendInputEvent({ type: 'keyDown', keyCode: key } as any);
+      wc.sendInputEvent({ type: 'keyUp',   keyCode: key } as any);
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: (err as Error).message };
+    }
+  }
+
+  async getElementText(selector: string): Promise<BrowserServiceResult> {
+    const wc = this.getActiveWebContents();
+    if (!wc) return { ok: false, error: 'No active browser tab' };
+    try {
+      const text = await wc.executeJavaScript(`
+        (function() {
+          const el = document.querySelector(${JSON.stringify(selector)});
+          if (!el) return null;
+          return el.innerText || el.textContent || '';
+        })()
+      `);
+      if (text === null) return { ok: false, error: `Element not found: ${selector}` };
+      return { ok: true, data: String(text).trim() };
+    } catch (err) {
+      return { ok: false, error: (err as Error).message };
+    }
+  }
+
   private getActiveWebContents(): Electron.WebContents | null {
     if (!this.activeTabId) return null;
     const tab = this.tabs.get(this.activeTabId);

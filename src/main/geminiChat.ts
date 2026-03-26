@@ -55,6 +55,30 @@ const GEMINI_TOOLS = [{
             }
         },
         ...BROWSER_DECLARATIONS,
+        {
+            name: 'file_list_directory',
+            description: 'List the contents of a directory. Returns structured JSON with name, type, and size.',
+            parameters: {
+                type: Type.OBJECT,
+                properties: {
+                    path: { type: Type.STRING, description: 'Absolute directory path to list.' },
+                },
+                required: ['path'],
+            },
+        },
+        {
+            name: 'file_search',
+            description: 'Search for a pattern in files. Returns structured JSON matches with file path, line number, and matching text.',
+            parameters: {
+                type: Type.OBJECT,
+                properties: {
+                    pattern: { type: Type.STRING, description: 'Search pattern (regex).' },
+                    path:    { type: Type.STRING, description: 'Directory to search in (default: current directory).' },
+                    glob:    { type: Type.STRING, description: 'File glob pattern to filter (e.g. "*.ts", "*.py").' },
+                },
+                required: ['pattern'],
+            },
+        },
     ]
 }] as any;
 

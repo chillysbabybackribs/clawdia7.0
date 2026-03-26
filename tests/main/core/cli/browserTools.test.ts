@@ -3,6 +3,17 @@ import { describe, it, expect, vi } from 'vitest';
 import { executeBrowserTool, BROWSER_TOOLS } from '../../../../src/main/core/cli/browserTools';
 import type { BrowserService } from '../../../../src/main/core/browser/BrowserService';
 
+vi.mock('fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('fs')>();
+  return {
+    ...actual,
+    readFileSync: (p: string) => {
+      if (p === '/tmp/shot.png') return Buffer.from('fakepng');
+      return actual.readFileSync(p);
+    },
+  };
+});
+
 function makeBrowser(overrides: Partial<BrowserService> = {}): BrowserService {
   return {
     navigate: vi.fn().mockResolvedValue({ tabId: 't1', url: 'https://example.com', title: 'Example' }),
@@ -18,14 +29,19 @@ function makeBrowser(overrides: Partial<BrowserService> = {}): BrowserService {
     newTab: vi.fn().mockResolvedValue({ id: 't2', title: 'New Tab', url: '', active: true, isLoading: false, isNewTab: true }),
     switchTab: vi.fn().mockResolvedValue(undefined),
     listTabs: vi.fn().mockResolvedValue([{ id: 't1', title: 'Example', url: 'https://example.com', active: true, isLoading: false, isNewTab: false }]),
+    // New tool stubs
+    select: vi.fn().mockResolvedValue({ ok: true }),
+    hover: vi.fn().mockResolvedValue({ ok: true }),
+    keyPress: vi.fn().mockResolvedValue({ ok: true }),
+    getElementText: vi.fn().mockResolvedValue({ ok: true, data: 'element text' }),
     // Unused stubs
     setBounds: vi.fn(),
     getExecutionMode: vi.fn(),
     open: vi.fn(),
-    back: vi.fn(),
-    forward: vi.fn(),
+    back: vi.fn().mockResolvedValue(undefined),
+    forward: vi.fn().mockResolvedValue(undefined),
     refresh: vi.fn(),
-    closeTab: vi.fn(),
+    closeTab: vi.fn().mockResolvedValue(undefined),
     matchHistory: vi.fn(),
     hide: vi.fn(),
     show: vi.fn(),
@@ -38,8 +54,8 @@ function makeBrowser(overrides: Partial<BrowserService> = {}): BrowserService {
 }
 
 describe('BROWSER_TOOLS', () => {
-  it('exports 13 tool definitions', () => {
-    expect(BROWSER_TOOLS).toHaveLength(13);
+  it('exports 20 tool definitions', () => {
+    expect(BROWSER_TOOLS).toHaveLength(20);
   });
 
   it('every tool has a name, description, and input_schema', () => {
@@ -108,10 +124,11 @@ describe('executeBrowserTool', () => {
     expect(result).toMatchObject({ url: 'https://example.com', title: 'Example', textSample: 'Hello' });
   });
 
-  it('browser_screenshot returns path only', async () => {
+  it('browser_screenshot returns base64 image data', async () => {
     const browser = makeBrowser();
-    const result = await executeBrowserTool('browser_screenshot', {}, browser);
-    expect(result).toEqual({ path: '/tmp/shot.png' });
+    const result = await executeBrowserTool('browser_screenshot', {}, browser) as Record<string, unknown>;
+    expect(result).toMatchObject({ type: 'base64', mimeType: 'image/png', width: 1280, height: 800 });
+    expect(typeof result.data).toBe('string');
   });
 
   it('browser_extract_text returns text content', async () => {

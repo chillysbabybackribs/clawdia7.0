@@ -87,6 +87,14 @@ export interface BrowserService {
   getPageInfo(): Promise<BrowserServiceResult>;
   /** Find elements matching a CSS selector, return array of { tag, text, attrs } */
   findElements(selector: string, limit?: number): Promise<BrowserServiceResult>;
+  /** Select an option in a <select> element by value or visible text */
+  select(selector: string, value: string): Promise<BrowserServiceResult>;
+  /** Hover over an element to trigger mouseover/mouseenter events */
+  hover(selector: string): Promise<BrowserServiceResult>;
+  /** Press a keyboard key (e.g. Enter, Escape, Tab, ArrowDown) */
+  keyPress(key: string): Promise<BrowserServiceResult>;
+  /** Get the visible text content of an element matching a CSS selector */
+  getElementText(selector: string): Promise<BrowserServiceResult>;
   // Session maintenance is currently treated as browser UI/session management,
   // not as a brokered capability mutation.
   listSessions(): Promise<string[]>;
