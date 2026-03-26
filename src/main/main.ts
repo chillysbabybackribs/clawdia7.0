@@ -5,6 +5,7 @@ import { TerminalSessionController } from './core/terminal/TerminalSessionContro
 import { registerIpc } from './registerIpc';
 import { registerTerminalIpc } from './registerTerminalIpc';
 import { registerVideoExtractorIpc } from './ipc/videoExtractor';
+import { initDb } from './db';
 
 const isDev = process.env.NODE_ENV === 'development';
 
@@ -33,6 +34,7 @@ function createWindow(): BrowserWindow {
 }
 
 app.whenReady().then(() => {
+  initDb();
   const win = createWindow();
   const browserService = new ElectronBrowserService(win, app.getPath('userData'));
   void browserService.init();
