@@ -118,6 +118,8 @@ export async function streamOpenAIChat({
           tools: ALL_TOOLS_OPENAI,
           tool_choice: 'auto',
           stream: true,
+          // @ts-ignore
+          store: false,
         },
         { signal },
       );
