@@ -1,5 +1,4 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import AgentSidebar from './components/AgentSidebar';
 import AppChrome from './components/AppChrome';
 import ChatPanel from './components/ChatPanel';
 import BrowserPanel from './components/BrowserPanel';
@@ -272,8 +271,6 @@ export default function App() {
     <div className="flex h-screen w-screen flex-col overflow-hidden rounded-[10px] border-[2px] border-white/[0.04]">
       <AppChrome />
       <div className="flex min-h-0 flex-1">
-        <AgentSidebar />
-
         <div
           className="relative flex h-full min-w-0 flex-col"
           style={{ flex: rightPaneMode === 'none' ? '1 0 0' : '35 0 0' }}
