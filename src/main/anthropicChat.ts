@@ -9,6 +9,10 @@ import type { BrowserService } from './core/browser/BrowserService';
 import { truncateBrowserResult, truncateToolResult, SHELL_MAX } from './core/cli/truncate';
 import { buildSharedSystemPrompt, buildAnthropicStreamSystemPrompt } from './core/cli/systemPrompt';
 import { startRun, trackToolCall, trackToolResult, completeRun, failRun } from './runTracker';
+import { evaluatePolicy } from './agent/policy-engine';
+import { getMemoryContext } from './db/memory';
+import { executeMemoryStore, executeMemorySearch, executeMemoryForget } from './agent/memoryExecutors';
+import { MEMORY_TOOLS } from './core/cli/memoryTools';
 
 /** Anthropic API accepts the same model ids as the in-app registry (e.g. claude-sonnet-4-6). */
 export function resolveAnthropicModelId(registryId: string): string {
@@ -163,7 +167,11 @@ export async function streamAnthropicChat({
       system: [
         {
           type: 'text' as const,
-          text: buildAnthropicStreamSystemPrompt(unrestrictedMode),
+          text: (() => {
+            const memCtx = getMemoryContext(userText);
+            const base = buildAnthropicStreamSystemPrompt(unrestrictedMode);
+            return memCtx ? `${memCtx}\n\n${base}` : base;
+          })(),
           cache_control: { type: 'ephemeral' as const },
         },
       ] as any,
@@ -244,7 +252,11 @@ export async function streamAnthropicChat({
       model: apiModelId,
       max_tokens: 8192,
       messages,
-      system: buildSharedSystemPrompt(unrestrictedMode),
+      system: (() => {
+        const memCtx = getMemoryContext(userText);
+        const base = buildSharedSystemPrompt(unrestrictedMode);
+        return memCtx ? `${memCtx}\n\n${base}` : base;
+      })(),
       tools: [
         { type: 'tool_search_tool_bm25_20251119', name: 'tool_search_tool_bm25' } as any,
         ...ANTHROPIC_SHELL_TOOLS.map((t, i) =>
@@ -252,6 +264,7 @@ export async function streamAnthropicChat({
             ? { ...t, cache_control: { type: 'ephemeral' as const } }
             : t
         ),
+        ...MEMORY_TOOLS,
         ...deferredBrowserTools,
       ] as any,
     };
@@ -259,6 +272,7 @@ export async function streamAnthropicChat({
   };
 
   const SHELL_TOOL_NAMES = new Set(['shell_exec', 'file_edit', 'file_list_directory', 'file_search']);
+  const MEMORY_TOOL_NAMES = new Set(['memory_store', 'memory_search', 'memory_forget']);
 
   /** Execute tool calls from an assistant message and return tool_result blocks. */
   const executeTools = async (
@@ -273,9 +287,63 @@ export async function streamAnthropicChat({
       console.log(`[tool] ${block.name}`, JSON.stringify(block.input).slice(0, 120));
       const argsSummary = JSON.stringify(block.input).slice(0, 120);
       const eventId = runId ? trackToolCall(runId, block.name, argsSummary) : '';
+
+      // ── Policy gate ──────────────────────────────────────────────────────
+      const decision = evaluatePolicy(
+        block.name,
+        block.input as Record<string, unknown>,
+        { runId: runId ?? undefined },
+      );
+
+      if (decision.effect === 'deny') {
+        resultContent = `[POLICY DENIED] ${decision.reason} (rule: ${decision.ruleId ?? 'none'}, profile: ${decision.profileName})`;
+        isError = true;
+        if (!webContents.isDestroyed()) {
+          webContents.send(IPC_EVENTS.CHAT_TOOL_ACTIVITY, {
+            id: block.id,
+            name: block.name,
+            status: 'error',
+            detail: resultContent,
+            durationMs: 0,
+            policyDenied: true,
+          });
+        }
+        results.push({ type: 'tool_result', tool_use_id: block.id, content: resultContent, is_error: true });
+        continue;
+      }
+
+      if (decision.effect === 'require_approval') {
+        // Surface to renderer — the model is told the action requires user approval and was held.
+        // In a future iteration this will await an approval IPC response; for now it blocks with a
+        // clear message that the user must approve the action in the UI.
+        resultContent = `[POLICY HELD] This action requires your approval: ${decision.reason}. ` +
+          `Tool "${block.name}" was not executed. You can approve it manually or change the policy profile in Settings.`;
+        if (!webContents.isDestroyed()) {
+          webContents.send(IPC_EVENTS.CHAT_TOOL_ACTIVITY, {
+            id: block.id,
+            name: block.name,
+            status: 'error',
+            detail: `Requires approval: ${decision.reason}`,
+            durationMs: 0,
+            policyHeld: true,
+          });
+        }
+        results.push({ type: 'tool_result', tool_use_id: block.id, content: resultContent });
+        continue;
+      }
+      // ── End policy gate ──────────────────────────────────────────────────
+
       try {
         if (SHELL_TOOL_NAMES.has(block.name)) {
           resultContent = await executeShellTool(block.name, block.input as Record<string, unknown>);
+        } else if (MEMORY_TOOL_NAMES.has(block.name)) {
+          if (block.name === 'memory_store') {
+            resultContent = executeMemoryStore(block.input as Record<string, unknown>);
+          } else if (block.name === 'memory_search') {
+            resultContent = executeMemorySearch(block.input as Record<string, unknown>);
+          } else {
+            resultContent = executeMemoryForget(block.input as Record<string, unknown>);
+          }
         } else {
           const output = await executeBrowserTool(block.name, block.input as Record<string, unknown>, browser);
           resultContent = truncateBrowserResult(JSON.stringify(output));
