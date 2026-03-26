@@ -14,10 +14,6 @@ import InputBar from './InputBar';
 import { type ToolStreamMap } from './ToolActivity';
 import MarkdownRenderer from './MarkdownRenderer';
 import SwarmPanel from './SwarmPanel';
-import TabStrip from './TabStrip';
-import type { ConversationTab } from '../tabLogic';
-
-
 interface ChatPanelProps {
   browserVisible: boolean;
   onToggleBrowser: () => void;
@@ -29,11 +25,6 @@ interface ChatPanelProps {
   onOpenPendingApproval?: (processId: string) => void;
   loadConversationId?: string | null;
   replayBuffer?: Array<{ type: string; data: any }> | null;
-  tabs: ConversationTab[];
-  activeTabId: string;
-  onNewTab: () => void;
-  onCloseTab: (tabId: string) => void;
-  onSwitchTab: (tabId: string) => void;
 }
 
 function ApprovalBanner({
@@ -460,11 +451,6 @@ export default function ChatPanel({
   onOpenPendingApproval,
   loadConversationId,
   replayBuffer,
-  tabs,
-  activeTabId,
-  onNewTab,
-  onCloseTab,
-  onSwitchTab,
 }: ChatPanelProps) {
   const MIN_THINKING_VISIBLE_MS = 2400;
   const THINKING_PAIR_WINDOW_MS = 1400;
@@ -1134,15 +1120,6 @@ export default function ChatPanel({
           </svg>
         </button>
       </div>
-
-      {/* Tab strip row — tabs + new tab button */}
-      <TabStrip
-        tabs={tabs}
-        activeTabId={activeTabId}
-        onSwitch={onSwitchTab}
-        onClose={onCloseTab}
-        onNew={onNewTab}
-      />
 
       <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto overflow-x-hidden scroll-smooth">
         <div className="flex flex-col gap-4 px-4 pt-5 pb-8 max-w-[720px]">
