@@ -4,8 +4,9 @@ import * as fs from 'fs';
 import { IPC_EVENTS } from './ipc-channels';
 import type { MessageAttachment } from '../shared/types';
 import { BROWSER_TOOLS, executeBrowserTool } from './core/cli/browserTools';
+import { executeShellTool } from './core/cli/shellTools';
 import type { BrowserService } from './core/browser/BrowserService';
-import { truncateBrowserResult } from './core/cli/truncate';
+import { truncateBrowserResult, truncateToolResult, SHELL_MAX } from './core/cli/truncate';
 import { SHARED_SYSTEM_PROMPT, ANTHROPIC_STREAM_SYSTEM_PROMPT } from './core/cli/systemPrompt';
 
 /** Anthropic API accepts the same model ids as the in-app registry (e.g. claude-sonnet-4-6). */
@@ -200,26 +201,58 @@ export async function streamAnthropicChat({
     return fullText;
   };
 
+  // Shell tools in Anthropic custom-tool format (always loaded, cached)
+  const ANTHROPIC_SHELL_TOOLS: Anthropic.Tool[] = [
+    {
+      name: 'shell_exec',
+      description: 'Execute a bash shell command on the local system.',
+      input_schema: { type: 'object' as const, properties: { command: { type: 'string', description: 'The shell command to run.' } }, required: ['command'] },
+    },
+    {
+      name: 'file_edit',
+      description: 'Read and edit files. command: view|create|str_replace. path: file path. file_text: content for create. old_str/new_str: for str_replace.',
+      input_schema: { type: 'object' as const, properties: { command: { type: 'string' }, path: { type: 'string' }, file_text: { type: 'string' }, old_str: { type: 'string' }, new_str: { type: 'string' } }, required: ['command', 'path'] },
+    },
+    {
+      name: 'file_list_directory',
+      description: 'List the contents of a directory. Returns structured JSON with name, type, and size.',
+      input_schema: { type: 'object' as const, properties: { path: { type: 'string', description: 'Absolute directory path to list.' } }, required: ['path'] },
+    },
+    {
+      name: 'file_search',
+      description: 'Search for a pattern in files. Returns structured JSON matches with file, line, text.',
+      input_schema: { type: 'object' as const, properties: { pattern: { type: 'string' }, path: { type: 'string' }, glob: { type: 'string' } }, required: ['pattern'] },
+    },
+  ];
+
   /** Run one non-streaming tool-use turn and return the assistant message. */
   const runToolTurn = async (
     messages: Anthropic.MessageParam[],
   ): Promise<Anthropic.Message> => {
-    // Browser tools are deferred — the model searches for them via tool_search_tool_bm25
-    // rather than loading all schemas into every request's context window.
-    // defer_loading and cache_control are mutually exclusive per Anthropic API
+    // Shell tools are always loaded (small, always needed).
+    // Browser tools are deferred — model searches via tool_search_tool_bm25.
+    // defer_loading and cache_control are mutually exclusive per Anthropic API.
     const deferredBrowserTools = BROWSER_TOOLS.map(t => ({ ...t, defer_loading: true }));
 
     const body: Anthropic.MessageCreateParams = {
       model: apiModelId,
       max_tokens: 8192,
       messages,
+      system: SHARED_SYSTEM_PROMPT,
       tools: [
         { type: 'tool_search_tool_bm25_20251119', name: 'tool_search_tool_bm25' } as any,
+        ...ANTHROPIC_SHELL_TOOLS.map((t, i) =>
+          i === ANTHROPIC_SHELL_TOOLS.length - 1
+            ? { ...t, cache_control: { type: 'ephemeral' as const } }
+            : t
+        ),
         ...deferredBrowserTools,
       ] as any,
     };
     return client.messages.create(body, { signal });
   };
+
+  const SHELL_TOOL_NAMES = new Set(['shell_exec', 'file_edit', 'file_list_directory', 'file_search']);
 
   /** Execute tool calls from an assistant message and return tool_result blocks. */
   const executeTools = async (
@@ -229,26 +262,34 @@ export async function streamAnthropicChat({
     const results: Anthropic.ToolResultBlockParam[] = [];
     for (const block of toolUseBlocks) {
       const startMs = Date.now();
-      let output: unknown;
+      let resultContent: string;
+      let isError = false;
       try {
-        output = await executeBrowserTool(block.name, block.input as Record<string, unknown>, browser);
+        if (SHELL_TOOL_NAMES.has(block.name)) {
+          resultContent = await executeShellTool(block.name, block.input as Record<string, unknown>);
+        } else {
+          const output = await executeBrowserTool(block.name, block.input as Record<string, unknown>, browser);
+          resultContent = truncateBrowserResult(JSON.stringify(output));
+          isError = (output as { ok?: boolean }).ok === false;
+        }
       } catch (err) {
-        output = { ok: false, error: (err as Error).message };
+        resultContent = JSON.stringify({ ok: false, error: (err as Error).message });
+        isError = true;
       }
       const durationMs = Date.now() - startMs;
       if (!webContents.isDestroyed()) {
         webContents.send(IPC_EVENTS.CHAT_TOOL_ACTIVITY, {
           id: block.id,
           name: block.name,
-          status: (output as { ok?: boolean }).ok === false ? 'error' : 'success',
-          detail: JSON.stringify(output).slice(0, 200),
+          status: isError ? 'error' : 'success',
+          detail: resultContent.slice(0, 200),
           durationMs,
         });
       }
       results.push({
         type: 'tool_result',
         tool_use_id: block.id,
-        content: truncateBrowserResult(JSON.stringify(output)),
+        content: resultContent,
       });
     }
     return results;
