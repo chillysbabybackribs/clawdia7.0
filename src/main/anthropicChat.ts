@@ -3,6 +3,8 @@ import type { WebContents } from 'electron';
 import * as fs from 'fs';
 import { IPC_EVENTS } from './ipc-channels';
 import type { MessageAttachment } from '../shared/types';
+import { BROWSER_TOOLS, executeBrowserTool } from './core/cli/browserTools';
+import type { BrowserService } from './core/browser/BrowserService';
 
 /** Anthropic API accepts the same model ids as the in-app registry (e.g. claude-sonnet-4-6). */
 export function resolveAnthropicModelId(registryId: string): string {
@@ -70,7 +72,47 @@ type StreamParams = {
   /** Prior turns; mutated on success with user + assistant messages */
   sessionMessages: Anthropic.MessageParam[];
   signal: AbortSignal;
+  /** When provided, browser tools are enabled in the chat loop */
+  browserService?: BrowserService;
 };
+
+import { exec } from 'child_process';
+import { promisify } from 'util';
+const execAsync = promisify(exec);
+
+async function executeToolCall(block: Anthropic.ToolUseBlock): Promise<string> {
+  try {
+    if (block.name === 'bash') {
+      const { command } = block.input as { command: string };
+      const { stdout, stderr } = await execAsync(command);
+      return stdout || stderr || 'Command executed successfully with no output.';
+    }
+    if (block.name === 'str_replace_based_edit_tool') {
+      const input = block.input as any;
+      const cmd = input.command;
+      const filePath = input.path;
+      if (cmd === 'view') {
+        return fs.readFileSync(filePath, 'utf-8');
+      }
+      if (cmd === 'create') {
+        fs.writeFileSync(filePath, input.file_text, 'utf-8');
+        return `File created at ${filePath}`;
+      }
+      if (cmd === 'str_replace') {
+        const text = fs.readFileSync(filePath, 'utf-8');
+        const count = text.split(input.old_str).length - 1;
+        if (count === 0) return 'Error: old_str not found in file.';
+        if (count > 1) return 'Error: old_str found multiple times.';
+        fs.writeFileSync(filePath, text.replace(input.old_str, input.new_str), 'utf-8');
+        return 'File updated successfully.';
+      }
+      return `Executed ${cmd} on ${filePath} (limited implementation).`;
+    }
+    return `Error: Unknown tool ${block.name}`;
+  } catch (err: any) {
+    return `Error executing tool: ${err.message}`;
+  }
+}
 
 export async function streamAnthropicChat({
   webContents,
@@ -80,6 +122,7 @@ export async function streamAnthropicChat({
   attachments,
   sessionMessages,
   signal,
+  browserService,
 }: StreamParams): Promise<{ response: string; error?: string }> {
   const client = new Anthropic({ apiKey });
   const apiModelId = resolveAnthropicModelId(modelRegistryId);
@@ -89,8 +132,6 @@ export async function streamAnthropicChat({
     role: 'user',
     content: userContent,
   };
-
-  const messagesForRequest = [...sessionMessages, userMessage];
 
   const sendThinking = (t: string) => {
     if (!webContents.isDestroyed()) webContents.send(IPC_EVENTS.CHAT_THINKING, t);
@@ -103,15 +144,17 @@ export async function streamAnthropicChat({
 
   const tryThinking = modelSupportsExtendedThinking(apiModelId);
 
+  const messagesForRequest: Anthropic.MessageParam[] = [...sessionMessages, userMessage];
+
   const runStream = async (withThinking: boolean): Promise<string> => {
     const body: Anthropic.MessageCreateParams = {
       model: apiModelId,
       max_tokens: 8192,
       messages: messagesForRequest,
-      system: `You have access to a local CLI environment. Use the native bash tool to execute shell commands and explore the system. Use the native text_editor tool to read and edit files. Use these tools efficiently to accomplish the user's tasks. Do not wait for user permission to use these tools unless it involves a destructive system change.`,
+      system: `You have access to a local CLI environment. Use the native bash tool to execute shell commands and explore the system. Use the native str_replace_based_edit_tool tool to read and edit files. Use these tools efficiently to accomplish the user's tasks. Do not wait for user permission to use these tools unless it involves a destructive system change.`,
       tools: [
         { type: 'bash_20250124', name: 'bash' } as any,
-        { type: 'text_editor_20250728', name: 'str_replace_editor' } as any
+        { type: 'text_editor_20250728', name: 'str_replace_based_edit_tool' } as any
       ],
     };
 
@@ -149,25 +192,124 @@ export async function streamAnthropicChat({
     return fullText;
   };
 
+  /** Run one non-streaming tool-use turn and return the assistant message. */
+  const runToolTurn = async (
+    messages: Anthropic.MessageParam[],
+  ): Promise<Anthropic.Message> => {
+    const body: Anthropic.MessageCreateParams = {
+      model: apiModelId,
+      max_tokens: 8192,
+      messages,
+      tools: BROWSER_TOOLS,
+    };
+    return client.messages.create(body, { signal });
+  };
+
+  /** Execute tool calls from an assistant message and return tool_result blocks. */
+  const executeTools = async (
+    toolUseBlocks: Anthropic.ToolUseBlock[],
+    browser: BrowserService,
+  ): Promise<Anthropic.ToolResultBlockParam[]> => {
+    const results: Anthropic.ToolResultBlockParam[] = [];
+    for (const block of toolUseBlocks) {
+      const startMs = Date.now();
+      let output: unknown;
+      try {
+        output = await executeBrowserTool(block.name, block.input as Record<string, unknown>, browser);
+      } catch (err) {
+        output = { ok: false, error: (err as Error).message };
+      }
+      const durationMs = Date.now() - startMs;
+      if (!webContents.isDestroyed()) {
+        webContents.send(IPC_EVENTS.CHAT_TOOL_ACTIVITY, {
+          id: block.id,
+          name: block.name,
+          status: (output as { ok?: boolean }).ok === false ? 'error' : 'success',
+          detail: JSON.stringify(output).slice(0, 200),
+          durationMs,
+        });
+      }
+      results.push({
+        type: 'tool_result',
+        tool_use_id: block.id,
+        content: JSON.stringify(output),
+      });
+    }
+    return results;
+  };
+
   try {
     sessionMessages.push(userMessage);
 
     let assistantText = '';
-    try {
-      assistantText = await runStream(true);
-    } catch (firstErr: unknown) {
-      const msg = firstErr instanceof Error ? firstErr.message : String(firstErr);
-      if (tryThinking && (msg.includes('thinking') || msg.includes('Thinking') || msg.includes('400'))) {
-        assistantText = await runStream(false);
-      } else {
-        throw firstErr;
+
+    if (!browserService) {
+      // ── Standard streaming path (no tools) ──────────────────────────────
+      try {
+        assistantText = await runStream(true);
+      } catch (firstErr: unknown) {
+        const msg = firstErr instanceof Error ? firstErr.message : String(firstErr);
+        if (tryThinking && (msg.includes('thinking') || msg.includes('Thinking') || msg.includes('400'))) {
+          assistantText = await runStream(false);
+        } else {
+          throw firstErr;
+        }
+      }
+    } else {
+      // ── Agentic tool-use loop ────────────────────────────────────────────
+      const loopMessages: Anthropic.MessageParam[] = [...messagesForRequest];
+      const MAX_TOOL_TURNS = 20;
+      let turns = 0;
+
+      while (turns < MAX_TOOL_TURNS) {
+        turns++;
+        const response = await runToolTurn(loopMessages);
+
+        const toolUseBlocks = response.content.filter(
+          (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use',
+        );
+        const textBlocks = response.content.filter(
+          (b): b is Anthropic.TextBlock => b.type === 'text',
+        );
+
+        // Stream any text content to the renderer
+        for (const block of textBlocks) {
+          if (block.text) {
+            assistantText += block.text;
+            if (!webContents.isDestroyed()) {
+              webContents.send(IPC_EVENTS.CHAT_STREAM_TEXT, block.text);
+            }
+          }
+        }
+
+        // Append assistant turn to loop messages
+        loopMessages.push({ role: 'assistant', content: response.content });
+
+        // If no tool calls, we're done
+        if (toolUseBlocks.length === 0 || response.stop_reason === 'end_turn') {
+          break;
+        }
+
+        // Execute tools and append results
+        const toolResults = await executeTools(toolUseBlocks, browserService);
+        loopMessages.push({ role: 'user', content: toolResults });
+      }
+
+      // Sync the canonical session with what happened in the loop (skip the
+      // first user message we already pushed above)
+      for (let i = messagesForRequest.length; i < loopMessages.length; i++) {
+        sessionMessages.push(loopMessages[i]);
       }
     }
 
-    sessionMessages.push({
-      role: 'assistant',
-      content: assistantText,
-    });
+    // Push final assistant text to session history (streaming path only —
+    // agentic path already pushed all turns above)
+    if (!browserService) {
+      sessionMessages.push({
+        role: 'assistant',
+        content: assistantText,
+      });
+    }
 
     if (!webContents.isDestroyed()) {
       webContents.send(IPC_EVENTS.CHAT_STREAM_END, { ok: true });
