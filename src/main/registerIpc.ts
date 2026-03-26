@@ -6,17 +6,19 @@ import { DEFAULT_MODEL_BY_PROVIDER } from '../shared/model-registry';
 import type { Message } from '../shared/types';
 import type { MessageAttachment } from '../shared/types';
 import { streamAnthropicChat } from './anthropicChat';
+import { streamGeminiChat } from './geminiChat';
+import { streamOpenAIChat } from './openaiChat';
 import { loadSettings, patchSettings, type AppSettings } from './settingsStore';
 
 function getMainWindow(): BrowserWindow | undefined {
   return BrowserWindow.getAllWindows()[0];
 }
 
-const sessions = new Map<string, Anthropic.MessageParam[]>();
+const sessions = new Map<string, any[]>();
 let activeConversationId: string | null = null;
 let chatAbort: AbortController | null = null;
 
-function getOrCreateSession(id: string): Anthropic.MessageParam[] {
+function getOrCreateSession(id: string): any[] {
   if (!sessions.has(id)) sessions.set(id, []);
   return sessions.get(id)!;
 }
@@ -175,14 +177,14 @@ export function registerIpc(browserService: ElectronBrowserService): void {
   ipcMain.handle(IPC.CHAT_SEND, async (event, payload: { text: string; attachments?: MessageAttachment[] }) => {
     const { text, attachments } = payload || { text: '' };
     const settings = loadSettings();
-    if (settings.provider !== 'anthropic') {
-      return { response: '', error: 'Select Anthropic as the provider in Settings to use chat.' };
+    if (settings.provider !== 'anthropic' && settings.provider !== 'gemini' && settings.provider !== 'openai') {
+      return { response: '', error: 'Select a provider in Settings to use chat.' };
     }
-    const apiKey = settings.providerKeys.anthropic?.trim();
+    const apiKey = settings.providerKeys[settings.provider as keyof typeof settings.providerKeys]?.trim();
     if (!apiKey) {
-      return { response: '', error: 'Add an Anthropic API key in Settings.' };
+      return { response: '', error: `Add a ${settings.provider} API key in Settings.` };
     }
-    const model = settings.models.anthropic ?? DEFAULT_MODEL_BY_PROVIDER.anthropic;
+    const model = settings.models[settings.provider as keyof typeof settings.models] ?? DEFAULT_MODEL_BY_PROVIDER[settings.provider as keyof typeof DEFAULT_MODEL_BY_PROVIDER];
 
     ensureConversation();
     const id = activeConversationId!;
@@ -190,6 +192,30 @@ export function registerIpc(browserService: ElectronBrowserService): void {
 
     chatAbort?.abort();
     chatAbort = new AbortController();
+
+    if (settings.provider === 'gemini') {
+      return streamGeminiChat({
+        webContents: event.sender,
+        apiKey,
+        modelRegistryId: model,
+        userText: text,
+        attachments,
+        sessionMessages,
+        signal: chatAbort.signal,
+      });
+    }
+
+    if (settings.provider === 'openai') {
+      return streamOpenAIChat({
+        webContents: event.sender,
+        apiKey,
+        modelRegistryId: model,
+        userText: text,
+        attachments,
+        sessionMessages,
+        signal: chatAbort.signal,
+      });
+    }
 
     return streamAnthropicChat({
       webContents: event.sender,
@@ -208,12 +234,12 @@ export function registerIpc(browserService: ElectronBrowserService): void {
     chatAbort = null;
   });
 
-  ipcMain.handle(IPC.CHAT_PAUSE, () => {});
-  ipcMain.handle(IPC.CHAT_RESUME, () => {});
-  ipcMain.handle(IPC.CHAT_ADD_CONTEXT, () => {});
-  ipcMain.handle(IPC.CHAT_RATE_TOOL, () => {});
-  ipcMain.handle(IPC.CHAT_DELETE, () => {});
-  ipcMain.handle(IPC.CHAT_OPEN_ATTACHMENT, () => {});
+  ipcMain.handle(IPC.CHAT_PAUSE, () => { });
+  ipcMain.handle(IPC.CHAT_RESUME, () => { });
+  ipcMain.handle(IPC.CHAT_ADD_CONTEXT, () => { });
+  ipcMain.handle(IPC.CHAT_RATE_TOOL, () => { });
+  ipcMain.handle(IPC.CHAT_DELETE, () => { });
+  ipcMain.handle(IPC.CHAT_OPEN_ATTACHMENT, () => { });
 
   ipcMain.handle(IPC.TASKS_SUMMARY, () => ({ runningCount: 0, completedCount: 0 }));
 
