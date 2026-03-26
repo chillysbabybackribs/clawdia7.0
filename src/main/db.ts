@@ -103,6 +103,51 @@ export function initDb(): void {
         created_at  INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_run_events_run ON run_events(run_id, created_at);
+
+      CREATE TABLE IF NOT EXISTS user_memory (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        category TEXT NOT NULL,
+        key TEXT NOT NULL,
+        value TEXT NOT NULL,
+        source TEXT NOT NULL DEFAULT 'agent',
+        confidence INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(category, key)
+      );
+
+      CREATE VIRTUAL TABLE IF NOT EXISTS user_memory_fts USING fts5(
+        key, value,
+        content=user_memory,
+        content_rowid=id
+      );
+
+      CREATE TRIGGER IF NOT EXISTS memory_ai AFTER INSERT ON user_memory BEGIN
+        INSERT INTO user_memory_fts(rowid, key, value) VALUES (new.id, new.key, new.value);
+      END;
+      CREATE TRIGGER IF NOT EXISTS memory_ad AFTER DELETE ON user_memory BEGIN
+        INSERT INTO user_memory_fts(user_memory_fts, rowid, key, value) VALUES ('delete', old.id, old.key, old.value);
+      END;
+      CREATE TRIGGER IF NOT EXISTS memory_au AFTER UPDATE ON user_memory BEGIN
+        INSERT INTO user_memory_fts(user_memory_fts, rowid, key, value) VALUES ('delete', old.id, old.key, old.value);
+        INSERT INTO user_memory_fts(rowid, key, value) VALUES (new.id, new.key, new.value);
+      END;
+
+      CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+        content,
+        content=messages,
+        content_rowid=id
+      );
+
+      CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
+        INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
+      END;
+      CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
+        INSERT INTO messages_fts(messages_fts, rowid, content) VALUES ('delete', old.id, old.content);
+      END;
+      CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
+        INSERT INTO messages_fts(messages_fts, rowid, content) VALUES ('delete', old.id, old.content);
+        INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
+      END;
     `);
 
     // Mark orphaned runs as failed (app was killed mid-run)
