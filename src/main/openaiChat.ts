@@ -3,8 +3,28 @@ import type { WebContents } from 'electron';
 import * as fs from 'fs';
 import { IPC_EVENTS } from './ipc-channels';
 import type { MessageAttachment } from '../shared/types';
+import { executeShellTool, SHELL_TOOLS_OPENAI } from './core/cli/shellTools';
+import { BROWSER_TOOLS, executeBrowserTool } from './core/cli/browserTools';
+import type { BrowserService } from './core/browser/BrowserService';
 
 type OpenAIMessage = OpenAI.Chat.ChatCompletionMessageParam;
+
+// Convert BROWSER_TOOLS (Anthropic schema) to OpenAI function tool format
+const BROWSER_TOOLS_OPENAI: OpenAI.Chat.ChatCompletionTool[] = BROWSER_TOOLS.map(t => ({
+  type: 'function' as const,
+  function: {
+    name: t.name,
+    description: t.description,
+    parameters: t.input_schema as Record<string, unknown>,
+  },
+}));
+
+const ALL_TOOLS_OPENAI: OpenAI.Chat.ChatCompletionTool[] = [
+  ...SHELL_TOOLS_OPENAI,
+  ...BROWSER_TOOLS_OPENAI,
+];
+
+const SYSTEM_PROMPT = `You have access to a local CLI environment and a browser. Use shell_exec to run shell commands, file_edit to read and edit files, and browser_* tools to navigate and interact with the browser. Use these tools efficiently. Do not wait for user permission unless the action is destructive.`;
 
 function buildUserContent(
   text: string,
@@ -46,6 +66,7 @@ type StreamParams = {
   attachments?: MessageAttachment[];
   sessionMessages: OpenAIMessage[];
   signal: AbortSignal;
+  browserService?: BrowserService;
 };
 
 export async function streamOpenAIChat({
@@ -56,6 +77,7 @@ export async function streamOpenAIChat({
   attachments,
   sessionMessages,
   signal,
+  browserService,
 }: StreamParams): Promise<{ response: string; error?: string }> {
   const client = new OpenAI({ apiKey });
 
@@ -76,25 +98,128 @@ export async function streamOpenAIChat({
   try {
     sessionMessages.push(userMessage);
 
-    const stream = await client.chat.completions.create(
-      {
-        model: modelRegistryId,
-        messages: sessionMessages,
-        stream: true,
-      },
-      { signal },
-    );
+    const loopMessages: OpenAIMessage[] = [
+      { role: 'system', content: SYSTEM_PROMPT },
+      ...sessionMessages,
+    ];
 
     let fullText = '';
-    for await (const chunk of stream) {
-      const delta = chunk.choices[0]?.delta?.content;
-      if (delta) {
-        fullText += delta;
-        sendText(delta);
+    const MAX_TOOL_TURNS = 20;
+    let turns = 0;
+
+    while (turns < MAX_TOOL_TURNS) {
+      turns++;
+
+      const stream = await client.chat.completions.create(
+        {
+          model: modelRegistryId,
+          messages: loopMessages,
+          tools: ALL_TOOLS_OPENAI,
+          tool_choice: 'auto',
+          stream: true,
+        },
+        { signal },
+      );
+
+      let turnText = '';
+      const toolCallAccumulators: Record<string, { name: string; args: string }> = {};
+
+      for await (const chunk of stream) {
+        const delta = chunk.choices[0]?.delta;
+        if (!delta) continue;
+
+        if (delta.content) {
+          turnText += delta.content;
+          sendText(delta.content);
+        }
+
+        // Accumulate streamed tool call arguments
+        if (delta.tool_calls) {
+          for (const tc of delta.tool_calls) {
+            const idx = String(tc.index);
+            if (!toolCallAccumulators[idx]) {
+              toolCallAccumulators[idx] = { name: tc.function?.name ?? '', args: '' };
+            }
+            if (tc.function?.name) toolCallAccumulators[idx].name = tc.function.name;
+            if (tc.function?.arguments) toolCallAccumulators[idx].args += tc.function.arguments;
+          }
+        }
+      }
+
+      fullText += turnText;
+
+      const toolCalls = Object.values(toolCallAccumulators);
+
+      // Push assistant turn to loop
+      const assistantMsg: OpenAIMessage = { role: 'assistant', content: turnText || null };
+      if (toolCalls.length > 0) {
+        (assistantMsg as any).tool_calls = Object.entries(toolCallAccumulators).map(([idx, tc]) => ({
+          id: `call_${idx}_${Date.now()}`,
+          type: 'function',
+          function: { name: tc.name, arguments: tc.args },
+        }));
+      }
+      loopMessages.push(assistantMsg);
+
+      if (toolCalls.length === 0) break;
+
+      // Execute tools and push results
+      for (const [idx, tc] of Object.entries(toolCallAccumulators)) {
+        const toolCallId = `call_${idx}_${Date.now()}`;
+        const startMs = Date.now();
+        let resultStr: string;
+
+        let args: Record<string, unknown> = {};
+        try { args = JSON.parse(tc.args || '{}'); } catch { /* leave empty */ }
+
+        if (!webContents.isDestroyed()) {
+          webContents.send(IPC_EVENTS.CHAT_TOOL_ACTIVITY, {
+            id: toolCallId,
+            name: tc.name,
+            status: 'running',
+            detail: tc.args.slice(0, 200),
+          });
+        }
+
+        try {
+          if (tc.name.startsWith('browser_') && browserService) {
+            const output = await executeBrowserTool(tc.name, args, browserService);
+            resultStr = JSON.stringify(output);
+          } else {
+            resultStr = await executeShellTool(tc.name, args);
+          }
+        } catch (err) {
+          resultStr = JSON.stringify({ ok: false, error: (err as Error).message });
+        }
+
+        const durationMs = Date.now() - startMs;
+        if (!webContents.isDestroyed()) {
+          webContents.send(IPC_EVENTS.CHAT_TOOL_ACTIVITY, {
+            id: toolCallId,
+            name: tc.name,
+            status: 'success',
+            detail: resultStr.slice(0, 200),
+            durationMs,
+          });
+        }
+
+        loopMessages.push({
+          role: 'tool',
+          tool_call_id: toolCallId,
+          content: resultStr,
+        } as OpenAIMessage);
       }
     }
 
-    sessionMessages.push({ role: 'assistant', content: fullText });
+    if (turns >= MAX_TOOL_TURNS && fullText === '') {
+      fullText = '[Tool loop reached maximum turn limit without producing a response.]';
+      sendText(fullText);
+    }
+
+    // Sync canonical session: skip system message (index 0) and original session messages
+    for (let i = 1 + sessionMessages.length; i < loopMessages.length; i++) {
+      sessionMessages.push(loopMessages[i]);
+    }
 
     if (!webContents.isDestroyed()) {
       webContents.send(IPC_EVENTS.CHAT_STREAM_END, { ok: true });

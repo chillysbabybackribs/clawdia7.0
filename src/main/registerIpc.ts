@@ -202,6 +202,7 @@ export function registerIpc(browserService: ElectronBrowserService): void {
         attachments,
         sessionMessages,
         signal: chatAbort.signal,
+        browserService,
       });
     }
 
@@ -214,6 +215,7 @@ export function registerIpc(browserService: ElectronBrowserService): void {
         attachments,
         sessionMessages,
         signal: chatAbort.signal,
+        browserService,
       });
     }
 
